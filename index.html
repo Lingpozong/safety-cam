@@ -3,34 +3,66 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>歩きスマホ衝突防止システム</title> <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <title>歩きスマホ衝突防止 (省電力版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        body { margin: 0; background: black; overflow: hidden; font-family: "Hiragino Kaku Gothic ProN", Meiryo, sans-serif; }
+        body { margin: 0; background: black; overflow: hidden; font-family: "Hiragino Kaku Gothic ProN", sans-serif; }
+        
+        /* 视频层 */
         video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
-        #status { position: absolute; top: 10px; left: 10px; color: white; z-index: 3; background: rgba(0,0,0,0.5); padding: 5px; font-size: 14px; }
         
-        /* 红色报警闪烁层 */
+        /* 界面元素 */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
+        
+        #status { 
+            position: absolute; top: 10px; left: 10px; color: white; 
+            background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; font-size: 14px; 
+        }
+
+        /* 节能模式遮罩 (全黑) */
+        #eco-mask {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: black; z-index: 4; display: none;
+        }
+        #eco-mask.active { display: block; }
+        
+        /* 省电模式开关按钮 */
+        #eco-btn {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.2); color: white; border: 1px solid white;
+            padding: 10px 20px; border-radius: 20px; cursor: pointer; pointer-events: auto;
+            z-index: 6; font-size: 16px; backdrop-filter: blur(5px);
+        }
+
+        /* 红色危险闪烁层 */
         #danger-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(255, 0, 0, 0.6); 
+            background: rgba(255, 0, 0, 0.7); 
             z-index: 10; display: none;
-            animation: flash 0.5s infinite;
+            animation: flash 0.3s infinite;
         }
-        @keyframes flash { 0% { opacity: 0.6; } 50% { opacity: 0.2; } 100% { opacity: 0.6; } }
+        @keyframes flash { 0% { opacity: 0.7; } 50% { opacity: 0.2; } 100% { opacity: 0.7; } }
         
         #alert-text {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; font-size: 40px; font-weight: bold; z-index: 11; display: none; text-align: center; white-space: nowrap;
+            color: white; font-size: 40px; font-weight: bold; z-index: 11; display: none; 
+            text-align: center; text-shadow: 0 0 10px black; white-space: nowrap;
         }
     </style>
 </head>
 <body>
 
-    <div id="status">AIモデルを読み込み中...</div>
+    <div id="eco-mask"></div>
+
+    <div id="status">システム起動中...</div>
+    <button id="eco-btn" onclick="toggleEcoMode()">省電力モード: OFF</button>
+    
     <div id="danger-overlay"></div>
-    <div id="alert-text">⚠️ 危険 ⚠️<br>前を見て！</div> <video id="video" playsinline muted autoplay></video>
+    <div id="alert-text">⚠️ 危険 ⚠️<br>前を見て！</div>
+    
+    <video id="video" playsinline muted autoplay></video>
     <canvas id="canvas"></canvas>
 
 <script>
@@ -40,13 +72,21 @@
     const status = document.getElementById('status');
     const dangerOverlay = document.getElementById('danger-overlay');
     const alertText = document.getElementById('alert-text');
+    const ecoMask = document.getElementById('eco-mask');
+    const ecoBtn = document.getElementById('eco-btn');
+    
     let model = null;
+    let isEcoMode = false;
+    
+    // --- 优化策略 1：帧率控制变量 ---
+    let lastPredictionTime = 0;
+    const PREDICTION_INTERVAL = 200; // 200毫秒 = 每秒检测 5 次 (这就足够了，极其省电)
 
     // 1. 启动摄像头
     async function setupCamera() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment' }, // 后置摄像头
+                video: { facingMode: 'environment' },
                 audio: false
             });
             video.srcObject = stream;
@@ -54,77 +94,103 @@
                 video.onloadedmetadata = () => resolve(video);
             });
         } catch (e) {
-            status.innerText = "カメラを起動できません。権限を許可するか、HTTPSを使用してください。";
-            alert("スマホのブラウザで開き、URLがHTTPSまたはlocalhostであることを確認してください。");
+            status.innerText = "カメラエラー。権限を確認してください。";
         }
     }
 
     // 2. 加载 AI 模型
     async function loadModel() {
-        model = await cocoSsd.load();
-        status.innerText = "準備完了！検知を開始します...";
+        // 使用 lite_mobilenet_v2 版本，牺牲一点点精度换取极致速度和低功耗
+        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+        status.innerText = "監視中 (5 FPS)";
         detectFrame();
     }
 
-    // 3. 核心检测循环
-    function detectFrame() {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+    // 3. 核心检测循环 (带时间锁)
+    function detectFrame(timestamp) {
+        // 设置画布尺寸
+        if (canvas.width !== video.videoWidth) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
 
-        model.detect(video).then(predictions => {
-            renderPredictions(predictions);
+        // --- 优化策略 1 实现：时间检查 ---
+        // 只有当当前时间超过上次检测时间 200ms 后，才进行下一次检测
+        if (timestamp - lastPredictionTime > PREDICTION_INTERVAL) {
+            
+            model.detect(video).then(predictions => {
+                renderPredictions(predictions);
+                lastPredictionTime = timestamp; // 更新最后检测时间
+                requestAnimationFrame(detectFrame);
+            });
+
+        } else {
+            // 如果还没到时间，直接跳过计算，等待下一帧
             requestAnimationFrame(detectFrame);
-        });
+        }
     }
 
-    // 4. 绘制框框 + 报警逻辑
+    // 4. 绘制与报警逻辑
     function renderPredictions(predictions) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // 如果开启了省电遮罩，且没有危险，就不需要清空和绘制canvas，进一步省电
+        if (!isEcoMode) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
         let isDangerous = false;
 
         predictions.forEach(prediction => {
-            // 过滤目标：人、车、卡车、公交
             const targetClasses = ['person', 'car', 'truck', 'bus'];
-            
             if (targetClasses.includes(prediction.class)) {
                 const [x, y, width, height] = prediction.bbox;
+                const objectRatio = height / video.videoHeight;
 
-                // 距离判断逻辑 (高度占比)
-                const screenHeight = video.videoHeight;
-                const objectRatio = height / screenHeight;
-
-                // 阈值：40%
-                if (objectRatio > 0.4) { 
-                    ctx.strokeStyle = '#FF0000'; 
-                    ctx.lineWidth = 4;
+                // 距离判断
+                if (objectRatio > 0.45) { 
                     isDangerous = true;
-                } else {
-                    ctx.strokeStyle = '#00FF00'; 
-                    ctx.lineWidth = 2;
                 }
 
-                ctx.strokeRect(x, y, width, height);
-
-                // 翻译显示的类别名称
-                let label = prediction.class;
-                if(label === 'person') label = '歩行者';
-                if(label === 'car') label = '車';
-                if(label === 'truck') label = 'トラック';
-                if(label === 'bus') label = 'バス';
-
-                ctx.fillStyle = isDangerous ? '#FF0000' : '#00FF00';
-                ctx.font = '20px "Hiragino Kaku Gothic ProN", sans-serif'; // 使用日语字体
-                ctx.fillText(label + " (" + Math.round(objectRatio*100) + "%)", x, y > 10 ? y - 5 : 10);
+                // 只有在非省电模式下才绘制框框
+                if (!isEcoMode) {
+                    ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(x, y, width, height);
+                    
+                    // 日语标签
+                    let label = prediction.class;
+                    if(label === 'person') label = '歩行者';
+                    if(label === 'car') label = '車';
+                    ctx.fillStyle = ctx.strokeStyle;
+                    ctx.font = '20px sans-serif';
+                    ctx.fillText(label, x, y > 10 ? y - 5 : 10);
+                }
             }
         });
 
-        // 5. 触发报警交互
+        // 5. 报警触发 (即使在省电黑屏模式下，如果有危险，也要强制显示报警层！)
         if (isDangerous) {
             dangerOverlay.style.display = 'block';
             alertText.style.display = 'block';
+            // 危险时自动隐藏遮罩，让用户看到路
+            if (isEcoMode) ecoMask.style.display = 'none'; 
         } else {
             dangerOverlay.style.display = 'none';
             alertText.style.display = 'none';
+            // 如果安全且处于省电模式，恢复遮罩
+            if (isEcoMode) ecoMask.style.display = 'block';
+        }
+    }
+
+    // --- 优化策略 2：UI 省电模式切换 ---
+    function toggleEcoMode() {
+        isEcoMode = !isEcoMode;
+        if (isEcoMode) {
+            ecoMask.classList.add('active');
+            ecoBtn.innerText = "省電力モード: ON";
+            // 可以在这里稍微调暗屏幕亮度 (Web API受限，通常靠黑色背景)
+        } else {
+            ecoMask.classList.remove('active');
+            ecoBtn.innerText = "省電力モード: OFF";
         }
     }
 
