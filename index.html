@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>歩きスマホ衝突防止 (完全版)</title>
+    <title>歩きスマホ衝突防止 (安定版)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
@@ -23,7 +23,6 @@
             background: black; z-index: 4; display: none;
         }
         
-        /* 启动按钮 (浏览器限制必须点击一次才能播放声音) */
         #start-btn {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             padding: 20px 40px; font-size: 20px; background: #007AFF; color: white; border: none; border-radius: 10px;
@@ -34,7 +33,7 @@
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
             background: rgba(255, 255, 255, 0.2); color: white; border: 1px solid white;
             padding: 10px 20px; border-radius: 20px; cursor: pointer; pointer-events: auto;
-            z-index: 6; font-size: 16px; backdrop-filter: blur(5px); display: none; /* 初始隐藏 */
+            z-index: 6; font-size: 16px; backdrop-filter: blur(5px); display: none;
         }
 
         #danger-overlay {
@@ -78,36 +77,31 @@
     
     let model = null;
     let isEcoMode = false;
+    let audioCtx = null;
+    
+    // --- 关键修复：添加“正在计算”的锁 ---
+    let isDetecting = false; 
     let lastPredictionTime = 0;
     const PREDICTION_INTERVAL = 200; 
-    let audioCtx = null; // 音频上下文
 
-    // 系统启动入口
     async function startSystem() {
         startBtn.style.display = 'none';
         status.style.display = 'block';
         ecoBtn.style.display = 'block';
         
-        // 1. 初始化音频 (解决浏览器自动播放限制)
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // 2. 请求通知权限
-        if (Notification.permission !== "granted") {
-            Notification.requestPermission();
-        }
+        if (Notification.permission !== "granted") Notification.requestPermission();
 
-        // 3. 启动摄像头和模型
         await setupCamera();
         loadModel();
     }
 
-    // 报警音效函数 (高频哔哔声)
     function playBeep() {
         if (!audioCtx) return;
         const oscillator = audioCtx.createOscillator();
         const gainNode = audioCtx.createGain();
         oscillator.type = 'square';
-        oscillator.frequency.setValueAtTime(800, audioCtx.currentTime); // 800Hz
+        oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
         oscillator.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
         gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
@@ -117,20 +111,13 @@
         oscillator.stop(audioCtx.currentTime + 0.1);
     }
 
-    // 发送系统通知
     function sendNotification() {
         if (Notification.permission === "granted") {
-            // 防抖动：避免瞬间弹出太多通知
             const now = Date.now();
             if (window.lastNotif && now - window.lastNotif < 3000) return; 
             window.lastNotif = now;
-
-            new Notification("⚠️ 衝突警告！", {
-                body: "前方に障害物があります！注意してください。",
-                icon: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
-            });
-            // 尝试震动 (仅安卓支持)
-            if (navigator.vibrate) navigator.vibrate([200, 100, 200]); 
+            new Notification("⚠️ 衝突警告！", { body: "前方に障害物があります！" });
+            if (navigator.vibrate) navigator.vibrate([200]); 
         }
     }
 
@@ -150,7 +137,7 @@
     async function loadModel() {
         status.innerText = "モデル読込中...";
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-        status.innerText = "監視中 (5 FPS)";
+        status.innerText = "監視中 (安定版)";
         detectFrame();
     }
 
@@ -160,30 +147,41 @@
             canvas.height = video.videoHeight;
         }
 
-        if (timestamp - lastPredictionTime > PREDICTION_INTERVAL) {
+        // --- 核心修复逻辑 ---
+        // 如果 1. 时间到了 AND 2. 上一次计算已经彻底结束了 (isDetecting == false)
+        if (!isDetecting && (timestamp - lastPredictionTime > PREDICTION_INTERVAL)) {
+            
+            isDetecting = true; // 🔒 锁住：不管后面来多少帧，都别插队
+
             model.detect(video).then(predictions => {
                 renderPredictions(predictions);
-                lastPredictionTime = timestamp; 
+                lastPredictionTime = performance.now(); // 更新时间
+                isDetecting = false; // 🔓 解锁：可以处理下一帧了
+                requestAnimationFrame(detectFrame);
+            }).catch(() => {
+                isDetecting = false; // 出错也要解锁
                 requestAnimationFrame(detectFrame);
             });
+
         } else {
+            // 没到时间或者正忙，直接跳过
             requestAnimationFrame(detectFrame);
         }
     }
 
     function renderPredictions(predictions) {
+        // 强制清空画布逻辑
         if (!isEcoMode) ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         let isDangerous = false;
 
+        // 如果 predictions 为空（没检测到东西），循环不会执行，isDangerous 保持 false
         predictions.forEach(prediction => {
             if (['person', 'car', 'truck', 'bus'].includes(prediction.class)) {
                 const [x, y, width, height] = prediction.bbox;
                 const objectRatio = height / video.videoHeight;
 
-                if (objectRatio > 0.45) { 
-                    isDangerous = true;
-                }
+                if (objectRatio > 0.45) isDangerous = true;
 
                 if (!isEcoMode) {
                     ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
@@ -198,16 +196,16 @@
             }
         });
 
+        // 状态更新逻辑
         if (isDangerous) {
+            // 只有真的危险时才报警
             dangerOverlay.style.display = 'block';
             alertText.style.display = 'block';
             if (isEcoMode) ecoMask.style.display = 'none';
-            
-            // 触发声音和通知！
             playBeep();
             sendNotification();
-            
         } else {
+            // 安全时立刻关闭报警
             dangerOverlay.style.display = 'none';
             alertText.style.display = 'none';
             if (isEcoMode) ecoMask.style.display = 'block';
