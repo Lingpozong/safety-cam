@@ -3,17 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>歩きスマホ衝突防止 (省電力版)</title>
+    <title>歩きスマホ衝突防止 (完全版)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
         body { margin: 0; background: black; overflow: hidden; font-family: "Hiragino Kaku Gothic ProN", sans-serif; }
-        
-        /* 视频层 */
         video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
         
-        /* 界面元素 */
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
         
         #status { 
@@ -21,25 +18,28 @@
             background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; font-size: 14px; z-index: 5;
         }
 
-        /* 节能模式遮罩 (全黑) */
         #eco-mask {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: black; z-index: 4; display: none;
         }
         
-        /* 省电模式开关按钮 */
+        /* 启动按钮 (浏览器限制必须点击一次才能播放声音) */
+        #start-btn {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            padding: 20px 40px; font-size: 20px; background: #007AFF; color: white; border: none; border-radius: 10px;
+            z-index: 20; cursor: pointer; pointer-events: auto;
+        }
+
         #eco-btn {
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
             background: rgba(255, 255, 255, 0.2); color: white; border: 1px solid white;
             padding: 10px 20px; border-radius: 20px; cursor: pointer; pointer-events: auto;
-            z-index: 6; font-size: 16px; backdrop-filter: blur(5px);
+            z-index: 6; font-size: 16px; backdrop-filter: blur(5px); display: none; /* 初始隐藏 */
         }
 
-        /* 红色危险闪烁层 */
         #danger-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(255, 0, 0, 0.7); 
-            z-index: 10; display: none;
+            background: rgba(255, 0, 0, 0.7); z-index: 10; display: none;
             animation: flash 0.3s infinite;
         }
         @keyframes flash { 0% { opacity: 0.7; } 50% { opacity: 0.2; } 100% { opacity: 0.7; } }
@@ -53,9 +53,10 @@
 </head>
 <body>
 
+    <button id="start-btn" onclick="startSystem()">システムを開始<br>(音が出ます)</button>
+    
     <div id="eco-mask"></div>
-
-    <div id="status">システム起動中...</div>
+    <div id="status" style="display:none;">待機中...</div>
     <button id="eco-btn" onclick="toggleEcoMode()">省電力モード: OFF</button>
     
     <div id="danger-overlay"></div>
@@ -73,13 +74,66 @@
     const alertText = document.getElementById('alert-text');
     const ecoMask = document.getElementById('eco-mask');
     const ecoBtn = document.getElementById('eco-btn');
+    const startBtn = document.getElementById('start-btn');
     
     let model = null;
     let isEcoMode = false;
     let lastPredictionTime = 0;
-    const PREDICTION_INTERVAL = 200; // 5 FPS
+    const PREDICTION_INTERVAL = 200; 
+    let audioCtx = null; // 音频上下文
 
-    // 1. 启动摄像头
+    // 系统启动入口
+    async function startSystem() {
+        startBtn.style.display = 'none';
+        status.style.display = 'block';
+        ecoBtn.style.display = 'block';
+        
+        // 1. 初始化音频 (解决浏览器自动播放限制)
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // 2. 请求通知权限
+        if (Notification.permission !== "granted") {
+            Notification.requestPermission();
+        }
+
+        // 3. 启动摄像头和模型
+        await setupCamera();
+        loadModel();
+    }
+
+    // 报警音效函数 (高频哔哔声)
+    function playBeep() {
+        if (!audioCtx) return;
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        oscillator.type = 'square';
+        oscillator.frequency.setValueAtTime(800, audioCtx.currentTime); // 800Hz
+        oscillator.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
+        gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + 0.1);
+    }
+
+    // 发送系统通知
+    function sendNotification() {
+        if (Notification.permission === "granted") {
+            // 防抖动：避免瞬间弹出太多通知
+            const now = Date.now();
+            if (window.lastNotif && now - window.lastNotif < 3000) return; 
+            window.lastNotif = now;
+
+            new Notification("⚠️ 衝突警告！", {
+                body: "前方に障害物があります！注意してください。",
+                icon: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+            });
+            // 尝试震动 (仅安卓支持)
+            if (navigator.vibrate) navigator.vibrate([200, 100, 200]); 
+        }
+    }
+
     async function setupCamera() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
@@ -87,22 +141,19 @@
                 audio: false
             });
             video.srcObject = stream;
-            return new Promise((resolve) => {
-                video.onloadedmetadata = () => resolve(video);
-            });
+            return new Promise((resolve) => video.onloadedmetadata = () => resolve(video));
         } catch (e) {
-            status.innerText = "カメラエラー。権限を確認してください。";
+            status.innerText = "カメラ起動失敗";
         }
     }
 
-    // 2. 加载 AI 模型
     async function loadModel() {
+        status.innerText = "モデル読込中...";
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         status.innerText = "監視中 (5 FPS)";
         detectFrame();
     }
 
-    // 3. 核心检测循环
     function detectFrame(timestamp) {
         if (canvas.width !== video.videoWidth) {
             canvas.width = video.videoWidth;
@@ -120,18 +171,13 @@
         }
     }
 
-    // 4. 绘制与报警逻辑
     function renderPredictions(predictions) {
-        // 如果不在省电模式，才清除画布（省电模式下不需要重绘，省电）
-        if (!isEcoMode) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
+        if (!isEcoMode) ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         let isDangerous = false;
 
         predictions.forEach(prediction => {
-            const targetClasses = ['person', 'car', 'truck', 'bus'];
-            if (targetClasses.includes(prediction.class)) {
+            if (['person', 'car', 'truck', 'bus'].includes(prediction.class)) {
                 const [x, y, width, height] = prediction.bbox;
                 const objectRatio = height / video.videoHeight;
 
@@ -143,9 +189,7 @@
                     ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
                     ctx.lineWidth = 3;
                     ctx.strokeRect(x, y, width, height);
-                    
-                    let label = prediction.class;
-                    if(label === 'person') label = '歩行者';
+                    let label = prediction.class === 'person' ? '歩行者' : prediction.class;
                     if(label === 'car') label = '車';
                     ctx.fillStyle = ctx.strokeStyle;
                     ctx.font = '20px sans-serif';
@@ -154,40 +198,32 @@
             }
         });
 
-        // 5. 报警触发与遮罩联动
         if (isDangerous) {
             dangerOverlay.style.display = 'block';
             alertText.style.display = 'block';
-            // 危险时：即使是省电模式，也要把黑布揭开！
-            if (isEcoMode) ecoMask.style.display = 'none'; 
+            if (isEcoMode) ecoMask.style.display = 'none';
+            
+            // 触发声音和通知！
+            playBeep();
+            sendNotification();
+            
         } else {
             dangerOverlay.style.display = 'none';
             alertText.style.display = 'none';
-            // 安全时：如果是省电模式，把黑布盖回去
             if (isEcoMode) ecoMask.style.display = 'block';
         }
     }
 
-    // --- 修复后的省电模式切换 ---
     function toggleEcoMode() {
-        isEcoMode = !isEcoMode; // 切换开关状态
-        
+        isEcoMode = !isEcoMode;
         if (isEcoMode) {
             ecoBtn.innerText = "省電力モード: ON";
-            // 开启时，立即显示黑屏
             ecoMask.style.display = 'block';
         } else {
             ecoBtn.innerText = "省電力モード: OFF";
-            // 【关键修复】关闭时，强制隐藏黑屏！
             ecoMask.style.display = 'none';
         }
     }
-
-    // 初始化
-    setupCamera().then(() => {
-        loadModel();
-    });
-
 </script>
 </body>
 </html>
