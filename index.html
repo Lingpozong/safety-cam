@@ -18,7 +18,7 @@
         
         #status { 
             position: absolute; top: 10px; left: 10px; color: white; 
-            background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; font-size: 14px; 
+            background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; font-size: 14px; z-index: 5;
         }
 
         /* 节能模式遮罩 (全黑) */
@@ -26,7 +26,6 @@
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: black; z-index: 4; display: none;
         }
-        #eco-mask.active { display: block; }
         
         /* 省电模式开关按钮 */
         #eco-btn {
@@ -77,10 +76,8 @@
     
     let model = null;
     let isEcoMode = false;
-    
-    // --- 优化策略 1：帧率控制变量 ---
     let lastPredictionTime = 0;
-    const PREDICTION_INTERVAL = 200; // 200毫秒 = 每秒检测 5 次 (这就足够了，极其省电)
+    const PREDICTION_INTERVAL = 200; // 5 FPS
 
     // 1. 启动摄像头
     async function setupCamera() {
@@ -100,39 +97,32 @@
 
     // 2. 加载 AI 模型
     async function loadModel() {
-        // 使用 lite_mobilenet_v2 版本，牺牲一点点精度换取极致速度和低功耗
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         status.innerText = "監視中 (5 FPS)";
         detectFrame();
     }
 
-    // 3. 核心检测循环 (带时间锁)
+    // 3. 核心检测循环
     function detectFrame(timestamp) {
-        // 设置画布尺寸
         if (canvas.width !== video.videoWidth) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
         }
 
-        // --- 优化策略 1 实现：时间检查 ---
-        // 只有当当前时间超过上次检测时间 200ms 后，才进行下一次检测
         if (timestamp - lastPredictionTime > PREDICTION_INTERVAL) {
-            
             model.detect(video).then(predictions => {
                 renderPredictions(predictions);
-                lastPredictionTime = timestamp; // 更新最后检测时间
+                lastPredictionTime = timestamp; 
                 requestAnimationFrame(detectFrame);
             });
-
         } else {
-            // 如果还没到时间，直接跳过计算，等待下一帧
             requestAnimationFrame(detectFrame);
         }
     }
 
     // 4. 绘制与报警逻辑
     function renderPredictions(predictions) {
-        // 如果开启了省电遮罩，且没有危险，就不需要清空和绘制canvas，进一步省电
+        // 如果不在省电模式，才清除画布（省电模式下不需要重绘，省电）
         if (!isEcoMode) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
@@ -145,18 +135,15 @@
                 const [x, y, width, height] = prediction.bbox;
                 const objectRatio = height / video.videoHeight;
 
-                // 距离判断
                 if (objectRatio > 0.45) { 
                     isDangerous = true;
                 }
 
-                // 只有在非省电模式下才绘制框框
                 if (!isEcoMode) {
                     ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
                     ctx.lineWidth = 3;
                     ctx.strokeRect(x, y, width, height);
                     
-                    // 日语标签
                     let label = prediction.class;
                     if(label === 'person') label = '歩行者';
                     if(label === 'car') label = '車';
@@ -167,30 +154,32 @@
             }
         });
 
-        // 5. 报警触发 (即使在省电黑屏模式下，如果有危险，也要强制显示报警层！)
+        // 5. 报警触发与遮罩联动
         if (isDangerous) {
             dangerOverlay.style.display = 'block';
             alertText.style.display = 'block';
-            // 危险时自动隐藏遮罩，让用户看到路
+            // 危险时：即使是省电模式，也要把黑布揭开！
             if (isEcoMode) ecoMask.style.display = 'none'; 
         } else {
             dangerOverlay.style.display = 'none';
             alertText.style.display = 'none';
-            // 如果安全且处于省电模式，恢复遮罩
+            // 安全时：如果是省电模式，把黑布盖回去
             if (isEcoMode) ecoMask.style.display = 'block';
         }
     }
 
-    // --- 优化策略 2：UI 省电模式切换 ---
+    // --- 修复后的省电模式切换 ---
     function toggleEcoMode() {
-        isEcoMode = !isEcoMode;
+        isEcoMode = !isEcoMode; // 切换开关状态
+        
         if (isEcoMode) {
-            ecoMask.classList.add('active');
             ecoBtn.innerText = "省電力モード: ON";
-            // 可以在这里稍微调暗屏幕亮度 (Web API受限，通常靠黑色背景)
+            // 开启时，立即显示黑屏
+            ecoMask.style.display = 'block';
         } else {
-            ecoMask.classList.remove('active');
             ecoBtn.innerText = "省電力モード: OFF";
+            // 【关键修复】关闭时，强制隐藏黑屏！
+            ecoMask.style.display = 'none';
         }
     }
 
