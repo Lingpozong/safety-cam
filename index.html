@@ -4,7 +4,235 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>歩きスマホ衝突防止 (安定版)</title>
+    <script src="https://cdn.<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>歩きスマホ衝突防止 (完成版)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <style>
+        body { margin: 0; background: black; overflow: hidden; font-family: "Hiragino Kaku Gothic ProN", sans-serif; }
+        video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
+        
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
+        
+        #status { 
+            position: absolute; top: 10px; left: 10px; color: white; 
+            background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; font-size: 14px; z-index: 5;
+        }
+
+        #eco-mask {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: black; z-index: 4; display: none;
+        }
+        
+        #start-btn {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            padding: 20px 40px; font-size: 20px; background: #007AFF; color: white; border: none; border-radius: 10px;
+            z-index: 20; cursor: pointer; pointer-events: auto;
+        }
+
+        #eco-btn {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.2); color: white; border: 1px solid white;
+            padding: 10px 20px; border-radius: 20px; cursor: pointer; pointer-events: auto;
+            z-index: 6; font-size: 16px; backdrop-filter: blur(5px); display: none;
+        }
+
+        #danger-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(255, 0, 0, 0.7); z-index: 10; display: none;
+            animation: flash 0.3s infinite;
+        }
+        @keyframes flash { 0% { opacity: 0.7; } 50% { opacity: 0.2; } 100% { opacity: 0.7; } }
+        
+        #alert-text {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-size: 40px; font-weight: bold; z-index: 11; display: none; 
+            text-align: center; text-shadow: 0 0 10px black; white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+    <button id="start-btn" onclick="startSystem()">システムを開始<br>(音が出ます)</button>
+    
+    <div id="eco-mask"></div>
+    <div id="status" style="display:none;">待機中...</div>
+    <button id="eco-btn" onclick="toggleEcoMode()">省電力モード: OFF</button>
+    
+    <div id="danger-overlay"></div>
+    <div id="alert-text">⚠️ 危険 ⚠️<br>前を見て！</div>
+    
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="canvas"></canvas>
+
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const dangerOverlay = document.getElementById('danger-overlay');
+    const alertText = document.getElementById('alert-text');
+    const ecoMask = document.getElementById('eco-mask');
+    const ecoBtn = document.getElementById('eco-btn');
+    const startBtn = document.getElementById('start-btn');
+    
+    let model = null;
+    let isEcoMode = false;
+    let audioCtx = null;
+    let isDetecting = false; 
+    let lastPredictionTime = 0;
+    const PREDICTION_INTERVAL = 200; 
+
+    // 🚨 阈值设置：只信任 60% 以上把握的识别结果
+    // 调高这个数字可以减少误报，调低可以增加灵敏度
+    const CONFIDENCE_THRESHOLD = 0.6; 
+
+    async function startSystem() {
+        startBtn.style.display = 'none';
+        status.style.display = 'block';
+        ecoBtn.style.display = 'block';
+        
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (Notification.permission !== "granted") Notification.requestPermission();
+
+        await setupCamera();
+        loadModel();
+    }
+
+    function playBeep() {
+        if (!audioCtx) return;
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        oscillator.type = 'square';
+        oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
+        gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + 0.1);
+    }
+
+    function sendNotification() {
+        if (Notification.permission === "granted") {
+            const now = Date.now();
+            if (window.lastNotif && now - window.lastNotif < 3000) return; 
+            window.lastNotif = now;
+            new Notification("⚠️ 衝突警告！", { body: "前方に障害物があります！" });
+            if (navigator.vibrate) navigator.vibrate([200]); 
+        }
+    }
+
+    async function setupCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment' },
+                audio: false
+            });
+            video.srcObject = stream;
+            return new Promise((resolve) => video.onloadedmetadata = () => resolve(video));
+        } catch (e) {
+            status.innerText = "カメラ起動失敗";
+        }
+    }
+
+    async function loadModel() {
+        status.innerText = "モデル読込中...";
+        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+        status.innerText = "監視中 (高精度モード)";
+        detectFrame();
+    }
+
+    function detectFrame(timestamp) {
+        if (canvas.width !== video.videoWidth) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
+
+        if (!isDetecting && (timestamp - lastPredictionTime > PREDICTION_INTERVAL)) {
+            isDetecting = true; 
+
+            // 关键修改：在这里传入 CONFIDENCE_THRESHOLD (0.6)
+            // 意思是：AI，如果你只有50%的把握，就别告诉我了，直接忽略！
+            model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
+                renderPredictions(predictions);
+                lastPredictionTime = performance.now(); 
+                isDetecting = false; 
+                requestAnimationFrame(detectFrame);
+            }).catch(() => {
+                isDetecting = false; 
+                requestAnimationFrame(detectFrame);
+            });
+
+        } else {
+            requestAnimationFrame(detectFrame);
+        }
+    }
+
+    function renderPredictions(predictions) {
+        if (!isEcoMode) ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        let isDangerous = false;
+
+        // 如果 predictions 数组是空的（或者被阈值过滤了），这个循环直接跳过
+        predictions.forEach(prediction => {
+            if (['person', 'car', 'truck', 'bus'].includes(prediction.class)) {
+                const [x, y, width, height] = prediction.bbox;
+                const objectRatio = height / video.videoHeight;
+
+                if (objectRatio > 0.45) isDangerous = true;
+
+                if (!isEcoMode) {
+                    ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(x, y, width, height);
+                    let label = prediction.class === 'person' ? '歩行者' : prediction.class;
+                    if(label === 'car') label = '車';
+                    
+                    // 显示置信度分数，方便调试
+                    const score = Math.round(prediction.score * 100);
+                    ctx.fillStyle = ctx.strokeStyle;
+                    ctx.font = '20px sans-serif';
+                    ctx.fillText(`${label} ${score}%`, x, y > 10 ? y - 5 : 10);
+                }
+            }
+        });
+
+        // 🛑 强制状态同步：这里是解决 "一直报警" 的核心
+        // 只要 calculate 出来的 isDangerous 是 false，就必须立刻关闭所有警报
+        if (isDangerous) {
+            dangerOverlay.style.display = 'block';
+            alertText.style.display = 'block';
+            if (isEcoMode) ecoMask.style.display = 'none';
+            playBeep();
+            sendNotification();
+        } else {
+            // 确保这里执行了！关闭所有红框和警告
+            dangerOverlay.style.display = 'none';
+            alertText.style.display = 'none';
+            if (isEcoMode) ecoMask.style.display = 'block';
+        }
+    }
+
+    function toggleEcoMode() {
+        isEcoMode = !isEcoMode;
+        if (isEcoMode) {
+            ecoBtn.innerText = "省電力モード: ON";
+            ecoMask.style.display = 'block';
+        } else {
+            ecoBtn.innerText = "省電力モード: OFF";
+            ecoMask.style.display = 'none';
+        }
+    }
+</script>
+</body>
+</html>jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
         body { margin: 0; background: black; overflow: hidden; font-family: "Hiragino Kaku Gothic ProN", sans-serif; }
