@@ -3,19 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>歩きスマホ防止 (隠形守護版)</title>
+    <title>歩きスマホ防止 (修復版)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
         body { margin: 0; background: black; overflow: hidden; font-family: "Hiragino Kaku Gothic ProN", sans-serif; touch-action: manipulation;}
         
-        /* 1. 原始摄像头：隐身（给AI看的真身） */
         #video { position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; z-index: -1; pointer-events: none;}
-        
-        /* 2. 画布：视觉输出（给人类看的分身） */
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; object-fit: cover; }
-        
-        /* 3. PiP专用播放器：隐身 */
         #pip-video { position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; z-index: -2; pointer-events: none;}
 
         #status { 
@@ -45,7 +40,7 @@
 </head>
 <body>
 
-    <button id="start-btn" onclick="startSystem()">システムを開始<br>(最終版)</button>
+    <button id="start-btn" onclick="startSystem()">システムを開始<br>(強制更新版)</button>
     
     <div id="status" style="display:none;">待機中...</div>
 
@@ -55,14 +50,12 @@
     </div>
     
     <video id="video" playsinline muted autoplay loop></video>
-    
     <canvas id="canvas"></canvas>
-    
     <video id="pip-video" playsinline muted autoplay loop></video>
 
 <script>
-    const video = document.getElementById('video'); // 真身
-    const pipVideo = document.getElementById('pip-video'); // 分身播放器
+    const video = document.getElementById('video');
+    const pipVideo = document.getElementById('pip-video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const status = document.getElementById('status');
@@ -78,6 +71,8 @@
     const PREDICTION_INTERVAL = 200; 
     const CONFIDENCE_THRESHOLD = 0.6; 
     let pipTarget = video;
+    let frameCount = 0; // 用于动画计数
+    let canUseCanvasStream = false; // 标记是否支持隐身
 
     async function startSystem() {
         startBtn.style.display = 'none';
@@ -85,7 +80,6 @@
         status.innerText = "システム起動中...";
         
         try {
-            // 1. 声音心跳 (防冻结)
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) {
                 audioCtx = new AudioContext();
@@ -96,23 +90,30 @@
                 await Notification.requestPermission();
             }
             
-            // 2. 摄像头启动
             await setupCamera();
             
-            // 3. 影分身技术：尝试建立 Canvas 流
+            // --- 核心：严格检测是否支持 Canvas 流 ---
             try {
-                // 降低一点帧率以节省性能
-                const stream = canvas.captureStream(24);
-                pipVideo.srcObject = stream;
-                pipTarget = pipVideo; 
-                console.log("Canvas Stream Mode Activated");
+                const stream = canvas.captureStream(30);
+                // 检查流里有没有轨道
+                if (stream.getVideoTracks().length > 0) {
+                    pipVideo.srcObject = stream;
+                    // 等待一下看能否真的播放
+                    await new Promise(r => setTimeout(r, 100)); 
+                    pipTarget = pipVideo; 
+                    canUseCanvasStream = true;
+                    console.log("Canvas Stream Success");
+                } else {
+                    throw new Error("No tracks");
+                }
             } catch (e) {
-                console.log("Canvas Stream not supported, falling back to raw video");
+                console.log("Canvas Stream Failed:", e);
+                // 失败回退到原始摄像头
                 pipTarget = video;
+                canUseCanvasStream = false;
             }
 
             ecoBtn.style.display = 'block';
-            
             if (document.pictureInPictureEnabled || video.webkitSupportsPresentationMode) {
                 pipBtn.style.display = 'block';
             }
@@ -193,7 +194,7 @@
         status.innerText = "モデル読込中...";
         try {
             model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-            status.innerText = "監視中 (最終版)";
+            status.innerText = "監視中";
             detectFrame();
         } catch(e) {
             status.innerText = "AI読込エラー";
@@ -202,27 +203,38 @@
 
     function detectFrame() {
         const now = performance.now();
+        frameCount++; // 增加计数器
+        
         if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 
-        // --- 核心渲染逻辑重构 ---
-        // 1. 决定底层画什么
+        // 1. 绘制逻辑
         if (isEcoMode) {
-            // 省电模式：画纯黑背景（实现“隐形”效果）
+            // 【关键修复】不要只画一次，每帧都清除并重画
             ctx.fillStyle = 'black';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // 【关键修复】让文字上下微动，强迫视频流更新
+            const offset = Math.sin(frameCount * 0.1) * 2; // 2像素的浮动
+            ctx.fillStyle = '#333'; // 暗灰色文字，不刺眼
+            ctx.font = '30px sans-serif';
+            ctx.textAlign = 'center';
+            // 将文字位置加上 offset
+            ctx.fillText("監視中...", canvas.width/2, canvas.height/2 + offset);
+            
+            // 画一个极小的、肉眼几乎不可见的变色点，确保像素在变化
+            ctx.fillStyle = (frameCount % 2 === 0) ? '#000000' : '#010101';
+            ctx.fillRect(0, 0, 1, 1);
+            
         } else {
-            // 正常模式：画摄像头画面
             if (canvas.width > 0 && canvas.height > 0) {
                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             }
         }
 
-        // 2. AI检测与上层绘制
         if (!isDetecting && (now - lastPredictionTime > PREDICTION_INTERVAL) && model) {
             isDetecting = true;
-            // AI 始终看原始 video，不受黑屏影响
             model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
-                renderOverlays(predictions); // 绘制上层元素（框、警告）
+                renderOverlays(predictions);
                 lastPredictionTime = performance.now();
                 isDetecting = false;
                 scheduleNextFrame(); 
@@ -231,33 +243,29 @@
                 scheduleNextFrame();
             });
         } else {
-            // 没检测时，用空数据刷新画布，保证黑屏或视频流的连贯性
-            renderOverlays([]);
+            // 即使没检测，也要调用 renderOverlays (传空) 来处理绘制
+            renderOverlays([]); 
             scheduleNextFrame();
         }
     }
 
     function scheduleNextFrame() {
         if (document.hidden || document.pictureInPictureElement) {
-            setTimeout(detectFrame, 60); 
+            setTimeout(detectFrame, 50); // 加快刷新率，防止卡顿
         } else {
             requestAnimationFrame(detectFrame);
         }
     }
 
-    // 新增：专门负责绘制叠加层（框和警告）的函数
     function renderOverlays(predictions) {
         let isDangerous = false;
 
-        // 1. 遍历检测结果，判断危险，正常模式下画框
         predictions.forEach(prediction => {
             if (['person', 'car', 'truck', 'bus'].includes(prediction.class)) {
                 const [x, y, width, height] = prediction.bbox;
                 const objectRatio = height / video.videoHeight;
-                
                 if (objectRatio > 0.45) isDangerous = true;
 
-                // 只有在非省电模式才画绿框/红框
                 if (!isEcoMode) {
                     ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
                     ctx.lineWidth = 4;
@@ -266,27 +274,31 @@
             }
         });
 
-        // 2. 危险时的最高优先级覆盖层
         if (isDangerous) {
-            // 触发报警音和通知
             playBeep();
             sendNotification();
 
-            // 视觉报警：覆盖一层半透明红光
-            // 无论当前是黑屏还是视频，这层红光都会盖在最上面
-            ctx.fillStyle = 'rgba(255, 0, 0, 0.6)'; // 60%透明度的红色
+            // 危险时最高优先级覆盖
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.6)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // 绘制警告文字
+            // 文字也要跳动，增加紧迫感
+            const shake = (Math.random() - 0.5) * 10;
             ctx.fillStyle = 'white';
-            ctx.font = 'bold 40px "Hiragino Kaku Gothic ProN", sans-serif';
+            ctx.font = 'bold 40px sans-serif';
             ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText("⚠️ 危険 ⚠️", canvas.width/2, canvas.height/2);
+            ctx.fillText("⚠️ 危険 ⚠️", canvas.width/2 + shake, canvas.height/2 + shake);
         }
     }
 
     function toggleEcoMode() {
+        // 【兼容性检查】
+        if (!canUseCanvasStream && pipTarget === video) {
+            // 如果是在 iOS 或不支持的设备上
+            alert("お使いの端末は、小窓のブラックアウト機能に対応していません。\n(カメラ映像がそのまま表示されます)");
+            // 这里我们依然允许切换模式，因为声音报警还需要工作
+        }
+        
         isEcoMode = !isEcoMode;
         ecoBtn.innerText = isEcoMode ? "省電力(隠形): ON" : "省電力(隠形): OFF";
     }
