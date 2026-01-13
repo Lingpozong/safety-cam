@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>歩きスマホ衝突防止 (完結版)</title>
+    <title>歩きスマホ衝突防止 (バックグラウンド対応)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
@@ -59,7 +59,7 @@
 </head>
 <body>
 
-    <button id="start-btn" onclick="startSystem()">システムを開始<br>(音が出ます)</button>
+    <button id="start-btn" onclick="startSystem()">システムを開始<br>(バックグラウンド対応)</button>
     
     <div id="eco-mask"></div>
     <div id="status" style="display:none;">待機中...</div>
@@ -72,7 +72,7 @@
     <div id="danger-overlay"></div>
     <div id="alert-text">⚠️ 危険 ⚠️<br>前を見て！</div>
     
-    <video id="video" playsinline muted autoplay></video>
+    <video id="video" playsinline muted autoplay loop></video>
     <canvas id="canvas"></canvas>
 
 <script>
@@ -101,15 +101,15 @@
         status.innerText = "システム起動中...";
         
         try {
+            // 1. 启动音频上下文
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) {
                 audioCtx = new AudioContext();
-                const buffer = audioCtx.createBuffer(1, 1, 22050);
-                const source = audioCtx.createBufferSource();
-                source.buffer = buffer;
-                source.connect(audioCtx.destination);
-                source.start(0);
             }
+
+            // 2. 关键：启动防冻结的“伪装音乐”
+            startSilentHeartbeat();
+
             if (window.Notification && Notification.permission !== "granted") {
                 await Notification.requestPermission();
             }
@@ -130,12 +130,33 @@
         }
     }
 
+    // --- 🔊 核心黑科技：静音心跳包 ---
+    // 这个函数会播放一个听不见的声音，骗过操作系统
+    function startSilentHeartbeat() {
+        if (!audioCtx) return;
+        
+        // 创建一个振荡器
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        
+        // 频率设为 1Hz (人类听不见)
+        oscillator.type = 'sine';
+        oscillator.frequency.value = 1; 
+        
+        // 音量设为 0.001 (极小，几乎静音，但不是0，防止被系统优化掉)
+        gainNode.gain.value = 0.001; 
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        
+        oscillator.start();
+        // 不设置 stop，让它一直播
+        console.log("Audio Heartbeat Started");
+    }
+
     function playBeep() {
         if (!audioCtx) return;
-        // 确保音频环境是唤醒状态 (关键修改)
-        if (audioCtx.state === 'suspended') {
-            audioCtx.resume();
-        }
+        if (audioCtx.state === 'suspended') audioCtx.resume();
 
         try {
             const oscillator = audioCtx.createOscillator();
@@ -171,6 +192,8 @@
                 audio: false
             });
             video.srcObject = stream;
+            // 确保视频也在后台保持活跃
+            video.setAttribute('playsinline', ''); 
             return new Promise((resolve) => {
                 video.onloadedmetadata = () => {
                     video.play();
@@ -187,54 +210,47 @@
         status.innerText = "モデル読込中...";
         try {
             model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-            status.innerText = "監視中 (PiP対応)";
+            status.innerText = "監視中 (后台增强)";
             detectFrame();
         } catch(e) {
             status.innerText = "AI読込エラー";
         }
     }
 
-    // --- 核心修复：智能切换循环引擎 ---
     function detectFrame() {
-        // 1. 获取当前时间戳
         const now = performance.now();
+        
+        // 增加检测：如果 audioCtx 被系统强行暂停了，尝试唤醒它
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
 
-        // 2. 检测逻辑
         if (!isDetecting && (now - lastPredictionTime > PREDICTION_INTERVAL) && model) {
-            
             isDetecting = true;
             model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
                 renderPredictions(predictions);
                 lastPredictionTime = performance.now();
                 isDetecting = false;
-                
-                // 递归调用 (下一帧)
                 scheduleNextFrame(); 
             }).catch(() => {
                 isDetecting = false;
                 scheduleNextFrame();
             });
-
         } else {
-            // 没到时间，直接调度下一帧
             scheduleNextFrame();
         }
     }
 
-    // 新增：调度器
     function scheduleNextFrame() {
-        // 如果正在画中画模式 (Floating Window)，或者页面不可见
-        // 使用 setTimeout (定时器) 来强制执行，防止浏览器“冻结”代码
-        if (document.pictureInPictureElement || document.hidden) {
-            setTimeout(detectFrame, 100); // 每100毫秒强制检查一次
+        // 只要页面不可见（不管是画中画，还是完全后台），就用 setTimeout
+        if (document.hidden || document.pictureInPictureElement) {
+            setTimeout(detectFrame, 100); 
         } else {
-            // 正常模式，使用 requestAnimationFrame (更流畅省电)
             requestAnimationFrame(detectFrame);
         }
     }
 
     function renderPredictions(predictions) {
-        // 如果不在画中画模式，才去画框框 (节省资源)
         if (!document.pictureInPictureElement && !isEcoMode) {
              if (canvas.width !== video.videoWidth) {
                 canvas.width = video.videoWidth;
@@ -251,7 +267,6 @@
                 const objectRatio = height / video.videoHeight;
                 if (objectRatio > 0.45) isDangerous = true;
 
-                // 只有正常显示时才画框
                 if (!document.pictureInPictureElement && !isEcoMode) {
                     ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
                     ctx.lineWidth = 3;
@@ -261,11 +276,9 @@
         });
 
         if (isDangerous) {
-            // 即使在画中画模式，声音和通知也要触发！
             playBeep();
             sendNotification();
             
-            // 只有正常模式才显示红屏
             if (!document.pictureInPictureElement) {
                 dangerOverlay.style.display = 'block';
                 alertText.style.display = 'block';
