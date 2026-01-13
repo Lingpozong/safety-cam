@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>歩きスマホ衝突防止 (修復版)</title>
+    <title>歩きスマホ衝突防止 (完結版)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
@@ -12,7 +12,6 @@
         video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
         
-        /* 界面元素 */
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
         
         #status { 
@@ -41,7 +40,7 @@
         .ctrl-btn {
             background: rgba(255, 255, 255, 0.2); color: white; border: 1px solid white;
             padding: 10px 15px; border-radius: 20px; cursor: pointer; pointer-events: auto;
-            font-size: 14px; backdrop-filter: blur(5px); display: none; /* 默认隐藏 */
+            font-size: 14px; backdrop-filter: blur(5px); display: none; 
         }
 
         #danger-overlay {
@@ -96,61 +95,48 @@
     const PREDICTION_INTERVAL = 200; 
     const CONFIDENCE_THRESHOLD = 0.6; 
 
-    // --- 安全启动函数 ---
     async function startSystem() {
-        // 1. 先把按钮隐藏了，不管后面成功失败，至少界面要有反应
         startBtn.style.display = 'none';
         status.style.display = 'block';
         status.innerText = "システム起動中...";
         
         try {
-            // 2. 尝试初始化音频
-            try {
-                const AudioContext = window.AudioContext || window.webkitAudioContext;
-                if (AudioContext) {
-                    audioCtx = new AudioContext();
-                    // 发出一个极短的无声声音，激活音频引擎
-                    const buffer = audioCtx.createBuffer(1, 1, 22050);
-                    const source = audioCtx.createBufferSource();
-                    source.buffer = buffer;
-                    source.connect(audioCtx.destination);
-                    source.start(0);
-                }
-            } catch (e) { console.warn("Audio error:", e); }
-
-            // 3. 尝试获取通知权限 (加了防报错)
-            try {
-                if (window.Notification && Notification.permission !== "granted") {
-                    await Notification.requestPermission();
-                }
-            } catch (e) { console.warn("Notification error:", e); }
-
-            // 4. 显示控制按钮
-            ecoBtn.style.display = 'block';
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (AudioContext) {
+                audioCtx = new AudioContext();
+                const buffer = audioCtx.createBuffer(1, 1, 22050);
+                const source = audioCtx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioCtx.destination);
+                source.start(0);
+            }
+            if (window.Notification && Notification.permission !== "granted") {
+                await Notification.requestPermission();
+            }
             
-            // 5. 安全检测“画中画”支持情况
+            ecoBtn.style.display = 'block';
             try {
                 if (document.pictureInPictureEnabled || (video.webkitSupportsPresentationMode)) {
                     pipBtn.style.display = 'block';
                 }
-            } catch (e) {
-                // 如果检测报错，就不显示小窗按钮，但不影响主程序
-                console.log("PiP check failed, ignoring.");
-            }
+            } catch (e) {}
 
-            // 6. 核心启动
             await setupCamera();
             loadModel();
 
         } catch (err) {
-            // 如果真的严重崩溃，把错误打印在屏幕上
             alert("起動エラー: " + err.message);
-            startBtn.style.display = 'block'; // 让按钮回来重试
+            startBtn.style.display = 'block'; 
         }
     }
 
     function playBeep() {
         if (!audioCtx) return;
+        // 确保音频环境是唤醒状态 (关键修改)
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+
         try {
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
@@ -163,7 +149,7 @@
             gainNode.connect(audioCtx.destination);
             oscillator.start();
             oscillator.stop(audioCtx.currentTime + 0.1);
-        } catch(e) { console.log(e); }
+        } catch(e) {}
     }
 
     function sendNotification() {
@@ -201,45 +187,61 @@
         status.innerText = "モデル読込中...";
         try {
             model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-            status.innerText = "監視中 (安全版)";
+            status.innerText = "監視中 (PiP対応)";
             detectFrame();
         } catch(e) {
             status.innerText = "AI読込エラー";
-            alert("AI模型加载失败，请刷新重试");
         }
     }
 
-    function detectFrame(timestamp) {
-        if (canvas.width !== video.videoWidth) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-        }
+    // --- 核心修复：智能切换循环引擎 ---
+    function detectFrame() {
+        // 1. 获取当前时间戳
+        const now = performance.now();
 
-        if (!isDetecting && (timestamp - lastPredictionTime > PREDICTION_INTERVAL)) {
-            isDetecting = true; 
+        // 2. 检测逻辑
+        if (!isDetecting && (now - lastPredictionTime > PREDICTION_INTERVAL) && model) {
             
-            // 确保 model 存在
-            if(model) {
-                model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
-                    renderPredictions(predictions);
-                    lastPredictionTime = performance.now(); 
-                    isDetecting = false; 
-                    requestAnimationFrame(detectFrame);
-                }).catch(() => {
-                    isDetecting = false; 
-                    requestAnimationFrame(detectFrame);
-                });
-            } else {
+            isDetecting = true;
+            model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
+                renderPredictions(predictions);
+                lastPredictionTime = performance.now();
                 isDetecting = false;
-                requestAnimationFrame(detectFrame);
-            }
+                
+                // 递归调用 (下一帧)
+                scheduleNextFrame(); 
+            }).catch(() => {
+                isDetecting = false;
+                scheduleNextFrame();
+            });
+
         } else {
+            // 没到时间，直接调度下一帧
+            scheduleNextFrame();
+        }
+    }
+
+    // 新增：调度器
+    function scheduleNextFrame() {
+        // 如果正在画中画模式 (Floating Window)，或者页面不可见
+        // 使用 setTimeout (定时器) 来强制执行，防止浏览器“冻结”代码
+        if (document.pictureInPictureElement || document.hidden) {
+            setTimeout(detectFrame, 100); // 每100毫秒强制检查一次
+        } else {
+            // 正常模式，使用 requestAnimationFrame (更流畅省电)
             requestAnimationFrame(detectFrame);
         }
     }
 
     function renderPredictions(predictions) {
-        if (!isEcoMode) ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // 如果不在画中画模式，才去画框框 (节省资源)
+        if (!document.pictureInPictureElement && !isEcoMode) {
+             if (canvas.width !== video.videoWidth) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+            }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
 
         let isDangerous = false;
 
@@ -249,42 +251,39 @@
                 const objectRatio = height / video.videoHeight;
                 if (objectRatio > 0.45) isDangerous = true;
 
-                if (!isEcoMode) {
+                // 只有正常显示时才画框
+                if (!document.pictureInPictureElement && !isEcoMode) {
                     ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
                     ctx.lineWidth = 3;
                     ctx.strokeRect(x, y, width, height);
-                    const score = Math.round(prediction.score * 100);
-                    let label = prediction.class === 'person' ? '歩行者' : prediction.class;
-                    if(label === 'car') label = '車';
-                    ctx.fillStyle = ctx.strokeStyle;
-                    ctx.font = '20px sans-serif';
-                    ctx.fillText(`${label} ${score}%`, x, y > 10 ? y - 5 : 10);
                 }
             }
         });
 
         if (isDangerous) {
-            dangerOverlay.style.display = 'block';
-            alertText.style.display = 'block';
-            if (isEcoMode) ecoMask.style.display = 'none';
+            // 即使在画中画模式，声音和通知也要触发！
             playBeep();
             sendNotification();
+            
+            // 只有正常模式才显示红屏
+            if (!document.pictureInPictureElement) {
+                dangerOverlay.style.display = 'block';
+                alertText.style.display = 'block';
+                if (isEcoMode) ecoMask.style.display = 'none';
+            }
         } else {
-            dangerOverlay.style.display = 'none';
-            alertText.style.display = 'none';
-            if (isEcoMode) ecoMask.style.display = 'block';
+            if (!document.pictureInPictureElement) {
+                dangerOverlay.style.display = 'none';
+                alertText.style.display = 'none';
+                if (isEcoMode) ecoMask.style.display = 'block';
+            }
         }
     }
 
     function toggleEcoMode() {
         isEcoMode = !isEcoMode;
-        if (isEcoMode) {
-            ecoBtn.innerText = "省電力: ON";
-            ecoMask.style.display = 'block';
-        } else {
-            ecoBtn.innerText = "省電力: OFF";
-            ecoMask.style.display = 'none';
-        }
+        ecoBtn.innerText = isEcoMode ? "省電力: ON" : "省電力: OFF";
+        ecoMask.style.display = isEcoMode ? 'block' : 'none';
     }
 
     async function togglePiP() {
@@ -295,7 +294,6 @@
                 await document.exitPictureInPicture();
             }
         } catch (error) {
-            // 如果报错，尝试 iOS 模式，如果还是不行，就放弃
             if (video.webkitSetPresentationMode) {
                 video.webkitSetPresentationMode(video.webkitPresentationMode === "inline" ? "picture-in-picture" : "inline");
             } else {
