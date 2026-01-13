@@ -2,18 +2,17 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
-    <title>歩きスマホ衝突防止 (Pro)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>歩きスマホ衝突防止 (修復版)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        body { margin: 0; background: black; overflow: hidden; font-family: "Hiragino Kaku Gothic ProN", sans-serif; touch-action: manipulation; }
+        body { margin: 0; background: black; overflow: hidden; font-family: "Hiragino Kaku Gothic ProN", sans-serif; }
         
         video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
         
+        /* 界面元素 */
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
         
         #status { 
@@ -33,17 +32,16 @@
             box-shadow: 0 4px 15px rgba(0,122,255,0.4);
         }
 
-        /* 按钮容器 */
         .btn-container {
             position: absolute; bottom: 30px; left: 0; width: 100%;
             display: flex; justify-content: center; gap: 15px; z-index: 6;
-            pointer-events: none; /* 让容器不挡手，按钮自己开启点击 */
+            pointer-events: none; 
         }
 
         .ctrl-btn {
             background: rgba(255, 255, 255, 0.2); color: white; border: 1px solid white;
             padding: 10px 15px; border-radius: 20px; cursor: pointer; pointer-events: auto;
-            font-size: 14px; backdrop-filter: blur(5px); display: none;
+            font-size: 14px; backdrop-filter: blur(5px); display: none; /* 默认隐藏 */
         }
 
         #danger-overlay {
@@ -98,46 +96,86 @@
     const PREDICTION_INTERVAL = 200; 
     const CONFIDENCE_THRESHOLD = 0.6; 
 
+    // --- 安全启动函数 ---
     async function startSystem() {
+        // 1. 先把按钮隐藏了，不管后面成功失败，至少界面要有反应
         startBtn.style.display = 'none';
         status.style.display = 'block';
-        ecoBtn.style.display = 'block';
+        status.innerText = "システム起動中...";
         
-        // 检查浏览器是否支持画中画，如果支持则显示按钮
-        if (document.pictureInPictureEnabled || video.webkitSupportsPresentationMode) {
-            pipBtn.style.display = 'block';
-        }
-        
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (Notification.permission !== "granted") Notification.requestPermission();
+        try {
+            // 2. 尝试初始化音频
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (AudioContext) {
+                    audioCtx = new AudioContext();
+                    // 发出一个极短的无声声音，激活音频引擎
+                    const buffer = audioCtx.createBuffer(1, 1, 22050);
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioCtx.destination);
+                    source.start(0);
+                }
+            } catch (e) { console.warn("Audio error:", e); }
 
-        await setupCamera();
-        loadModel();
+            // 3. 尝试获取通知权限 (加了防报错)
+            try {
+                if (window.Notification && Notification.permission !== "granted") {
+                    await Notification.requestPermission();
+                }
+            } catch (e) { console.warn("Notification error:", e); }
+
+            // 4. 显示控制按钮
+            ecoBtn.style.display = 'block';
+            
+            // 5. 安全检测“画中画”支持情况
+            try {
+                if (document.pictureInPictureEnabled || (video.webkitSupportsPresentationMode)) {
+                    pipBtn.style.display = 'block';
+                }
+            } catch (e) {
+                // 如果检测报错，就不显示小窗按钮，但不影响主程序
+                console.log("PiP check failed, ignoring.");
+            }
+
+            // 6. 核心启动
+            await setupCamera();
+            loadModel();
+
+        } catch (err) {
+            // 如果真的严重崩溃，把错误打印在屏幕上
+            alert("起動エラー: " + err.message);
+            startBtn.style.display = 'block'; // 让按钮回来重试
+        }
     }
 
     function playBeep() {
         if (!audioCtx) return;
-        const oscillator = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-        oscillator.type = 'square';
-        oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
-        oscillator.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
-        gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        oscillator.start();
-        oscillator.stop(audioCtx.currentTime + 0.1);
+        try {
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.1);
+        } catch(e) { console.log(e); }
     }
 
     function sendNotification() {
-        if (Notification.permission === "granted") {
-            const now = Date.now();
-            if (window.lastNotif && now - window.lastNotif < 3000) return; 
-            window.lastNotif = now;
-            new Notification("⚠️ 衝突警告！", { body: "前方に障害物があります！" });
-            if (navigator.vibrate) navigator.vibrate([200]); 
-        }
+        try {
+            if (window.Notification && Notification.permission === "granted") {
+                const now = Date.now();
+                if (window.lastNotif && now - window.lastNotif < 3000) return; 
+                window.lastNotif = now;
+                new Notification("⚠️ 衝突警告！", { body: "前方に障害物があります！" });
+                if (navigator.vibrate) navigator.vibrate([200]); 
+            }
+        } catch(e) {}
     }
 
     async function setupCamera() {
@@ -147,17 +185,28 @@
                 audio: false
             });
             video.srcObject = stream;
-            return new Promise((resolve) => video.onloadedmetadata = () => resolve(video));
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => {
+                    video.play();
+                    resolve(video);
+                };
+            });
         } catch (e) {
-            status.innerText = "カメラ起動失敗";
+            status.innerText = "カメラ権限が必要です。";
+            throw e;
         }
     }
 
     async function loadModel() {
         status.innerText = "モデル読込中...";
-        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-        status.innerText = "監視中 (Pro版)";
-        detectFrame();
+        try {
+            model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+            status.innerText = "監視中 (安全版)";
+            detectFrame();
+        } catch(e) {
+            status.innerText = "AI読込エラー";
+            alert("AI模型加载失败，请刷新重试");
+        }
     }
 
     function detectFrame(timestamp) {
@@ -168,15 +217,22 @@
 
         if (!isDetecting && (timestamp - lastPredictionTime > PREDICTION_INTERVAL)) {
             isDetecting = true; 
-            model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
-                renderPredictions(predictions);
-                lastPredictionTime = performance.now(); 
-                isDetecting = false; 
+            
+            // 确保 model 存在
+            if(model) {
+                model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
+                    renderPredictions(predictions);
+                    lastPredictionTime = performance.now(); 
+                    isDetecting = false; 
+                    requestAnimationFrame(detectFrame);
+                }).catch(() => {
+                    isDetecting = false; 
+                    requestAnimationFrame(detectFrame);
+                });
+            } else {
+                isDetecting = false;
                 requestAnimationFrame(detectFrame);
-            }).catch(() => {
-                isDetecting = false; 
-                requestAnimationFrame(detectFrame);
-            });
+            }
         } else {
             requestAnimationFrame(detectFrame);
         }
@@ -231,7 +287,6 @@
         }
     }
 
-    // --- 新增：画中画 (PiP) 功能 ---
     async function togglePiP() {
         try {
             if (video !== document.pictureInPictureElement) {
@@ -240,11 +295,11 @@
                 await document.exitPictureInPicture();
             }
         } catch (error) {
-            // iOS 兼容处理
+            // 如果报错，尝试 iOS 模式，如果还是不行，就放弃
             if (video.webkitSetPresentationMode) {
                 video.webkitSetPresentationMode(video.webkitPresentationMode === "inline" ? "picture-in-picture" : "inline");
             } else {
-                alert("このブラウザは小窓モードに対応していません");
+                alert("この端末は対応していません");
             }
         }
     }
