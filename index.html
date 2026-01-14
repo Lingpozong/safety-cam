@@ -3,49 +3,43 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WalkSafe AI System</title>
+    <title>WalkSafe AI Ultimate</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary-color: #00f3ff; /* 赛博青 */
-            --danger-color: #ff2a2a;  /* 警报红 */
-            --bg-glass: rgba(20, 20, 20, 0.6);
-            --border-glass: rgba(255, 255, 255, 0.1);
+            --primary-color: #00f3ff;
+            --danger-color: #ff2a2a;
+            --bg-glass: rgba(20, 20, 20, 0.75);
+            --border-glass: rgba(255, 255, 255, 0.15);
         }
 
         body { 
             margin: 0; background: black; overflow: hidden; 
-            font-family: 'Rajdhani', sans-serif; /* 科技感字体 */
+            font-family: 'Rajdhani', sans-serif;
             touch-action: manipulation;
             color: white;
         }
         
-        /* 视频层 */
         #video, #pip-video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
 
-        /* === 扫描线特效 === */
+        /* 扫描线 */
         .scan-line {
             position: absolute; top: 0; left: 0; width: 100%; height: 5px;
             background: linear-gradient(to right, transparent, var(--primary-color), transparent);
             opacity: 0.5; z-index: 2; pointer-events: none;
-            animation: scan 3s linear infinite;
-            display: none; /* 启动后显示 */
+            animation: scan 3s linear infinite; display: none;
         }
-        @keyframes scan {
-            0% { top: 0%; }
-            100% { top: 100%; }
-        }
+        @keyframes scan { 0% { top: 0%; } 100% { top: 100%; } }
 
-        /* === 顶部状态栏 === */
+        /* 顶部状态栏 */
         #top-bar {
             position: absolute; top: 0; left: 0; width: 100%; height: 60px;
             background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
             z-index: 10; display: flex; align-items: center; justify-content: space-between;
-            padding: 0 20px; box-sizing: border-box;
-            pointer-events: none;
+            padding: 0 20px; box-sizing: border-box; pointer-events: none;
         }
         .status-badge {
             background: rgba(0, 243, 255, 0.1); border: 1px solid var(--primary-color);
@@ -53,25 +47,25 @@
             text-shadow: 0 0 5px var(--primary-color); letter-spacing: 1px;
         }
 
-        /* === 底部控制台 (玻璃拟态) === */
+        /* 底部控制台 (调整为容纳3个按钮) */
         #control-panel {
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            width: 90%; max-width: 400px;
+            width: 95%; max-width: 450px;
             background: var(--bg-glass);
             backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
             border: 1px solid var(--border-glass);
-            border-radius: 20px; padding: 15px;
-            display: flex; justify-content: space-around; align-items: center;
-            z-index: 20; transition: all 0.3s ease;
-            display: none; /* 启动后显示 */
+            border-radius: 20px; padding: 15px 10px;
+            display: flex; justify-content: space-between; align-items: center;
+            z-index: 20; display: none;
         }
 
         .ctrl-btn {
             background: transparent; border: 1px solid rgba(255,255,255,0.3);
-            color: white; padding: 10px 0; width: 45%; border-radius: 12px;
-            font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 16px;
+            color: white; padding: 8px 0; width: 32%; /* 变窄以放下3个按钮 */
+            border-radius: 12px;
+            font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 14px;
             cursor: pointer; transition: all 0.2s;
-            display: flex; flex-direction: column; align-items: center; gap: 5px;
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
         }
         .ctrl-btn:active { transform: scale(0.95); background: rgba(255,255,255,0.1); }
         .ctrl-btn.active { 
@@ -81,13 +75,12 @@
             box-shadow: 0 0 10px rgba(0, 243, 255, 0.3);
         }
 
-        /* === 启动屏幕 === */
+        /* 启动屏幕 */
         #start-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: black; z-index: 50;
             display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
-        
         .glow-circle {
             width: 120px; height: 120px; border-radius: 50%;
             border: 2px solid var(--primary-color);
@@ -100,11 +93,10 @@
             50% { box-shadow: 0 0 40px var(--primary-color); transform: scale(1.05); }
             100% { box-shadow: 0 0 20px var(--primary-color); transform: scale(1); }
         }
-        
         .start-text { font-size: 18px; font-weight: bold; color: var(--primary-color); }
         .sub-text { margin-top: 20px; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 2px;}
 
-        /* === 警告覆盖层 (视觉增强) === */
+        /* 警告覆盖层 */
         #danger-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: radial-gradient(circle, transparent 40%, rgba(255, 0, 0, 0.8) 100%);
@@ -134,18 +126,21 @@
     <video id="pip-video" playsinline muted autoplay loop></video>
 
     <div id="control-panel">
+        <button id="mode-btn" class="ctrl-btn" onclick="toggleAlertMode()">
+            <span>🚨 ALERT</span>
+            <span id="mode-text" style="font-size:10px; opacity:0.7">SOUND+VIB</span>
+        </button>
         <button id="eco-btn" class="ctrl-btn" onclick="toggleEcoMode()">
-            <span>⚡️ ECO MODE</span>
+            <span>⚡️ ECO</span>
             <span style="font-size:10px; opacity:0.7">OFF</span>
         </button>
         <button id="pip-btn" class="ctrl-btn" onclick="togglePiP()">
-            <span>📺 PiP WINDOW</span>
+            <span>📺 PiP</span>
             <span style="font-size:10px; opacity:0.7">OPEN</span>
         </button>
     </div>
 
 <script>
-    // --- 核心逻辑保持不变 (High Speed Response Logic) ---
     const video = document.getElementById('video');
     const pipVideo = document.getElementById('pip-video');
     const canvas = document.getElementById('canvas');
@@ -159,6 +154,8 @@
     const dangerOverlay = document.getElementById('danger-overlay');
     const fpsBadge = document.getElementById('fps-badge');
     const ecoBtn = document.getElementById('eco-btn');
+    const modeBtn = document.getElementById('mode-btn');
+    const modeText = document.getElementById('mode-text');
 
     let model = null;
     let isEcoMode = false;
@@ -174,12 +171,16 @@
     let lastBeepTime = 0;
     const BEEP_INTERVAL = 500;     
     
+    // --- 新增：警报模式状态 ---
+    // 0: Sound Only, 1: Vibrate Only, 2: Both
+    let alertMode = 2; 
+    
     let pipTarget = video; 
     let frameCount = 0; 
     const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
     async function startSystem() {
-        startScreen.style.display = 'none'; // 隐藏启动页
+        startScreen.style.display = 'none';
         
         try {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -195,7 +196,6 @@
             
             await setupCamera();
             
-            // UI 显示
             topBar.style.display = 'flex';
             controlPanel.style.display = 'flex';
             scanLine.style.display = 'block';
@@ -233,6 +233,7 @@
         o.start(); g.gain.value = 0.0001;
     }
 
+    // --- 警报功能函数 (Sound) ---
     function tryPlayBeep() {
         if (!audioCtx) return;
         const now = Date.now();
@@ -253,6 +254,15 @@
         } catch(e) {}
     }
 
+    // --- 警报功能函数 (Vibration) ---
+    function tryVibrate() {
+        // iOS Safari 不支持 navigator.vibrate，这里会静默失败
+        if (navigator.vibrate) {
+            // 震动 200ms
+            navigator.vibrate([200]);
+        }
+    }
+
     function sendNotification() {
         try {
             if (window.Notification && Notification.permission === "granted") {
@@ -260,7 +270,6 @@
                 if (window.lastNotif && now - window.lastNotif < 3000) return; 
                 window.lastNotif = now;
                 new Notification("⚠️ 衝突警告！", { body: "LOOK OUT!" });
-                if (navigator.vibrate) navigator.vibrate([200]); 
             }
         } catch(e) {}
     }
@@ -301,18 +310,11 @@
         frameCount++;
         if (video.paused) video.play().catch(()=>{});
         
-        // --- UI 渲染逻辑更新 (更科幻) ---
-        
-        // 1. 绘制背景
         if (isEcoMode) {
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Eco Mode 下绘制动态雷达效果
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
-            
-            // 旋转雷达线
             const angle = (frameCount * 0.05) % (Math.PI * 2);
             ctx.strokeStyle = 'rgba(0, 243, 255, 0.3)';
             ctx.lineWidth = 2;
@@ -320,19 +322,15 @@
             ctx.moveTo(centerX, centerY);
             ctx.lineTo(centerX + Math.cos(angle) * 100, centerY + Math.sin(angle) * 100);
             ctx.stroke();
-            
-            // 呼吸文字
             const alpha = 0.5 + Math.sin(frameCount * 0.1) * 0.4;
             ctx.fillStyle = `rgba(0, 243, 255, ${alpha})`;
             ctx.font = '20px "Rajdhani"';
             ctx.textAlign = 'center';
             ctx.fillText("ECO SURVEILLANCE ACTIVE", centerX, centerY + 140);
-            
         } else {
             if (canvas.width > 0) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         }
 
-        // 2. 检测逻辑
         if (!isDetecting && (now - lastPredictionTime > PREDICTION_INTERVAL) && model) {
             isDetecting = true;
             model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
@@ -353,7 +351,6 @@
     function processPredictions(predictions) {
         let currentFrameDangerous = false;
         
-        // 绘制检测框 (Sci-Fi 风格)
         predictions.forEach(prediction => {
             if (['person', 'car', 'truck', 'bus'].includes(prediction.class)) {
                 const [x, y, width, height] = prediction.bbox;
@@ -362,24 +359,16 @@
 
                 if (!isEcoMode) {
                     const color = isDanger ? '#ff2a2a' : '#00f3ff';
-                    
-                    // 绘制四角框而不是实线框，更像 HUD
                     const lineLen = width * 0.2;
                     ctx.strokeStyle = color;
                     ctx.lineWidth = 4;
-                    
                     ctx.beginPath();
-                    // 左上
                     ctx.moveTo(x, y + lineLen); ctx.lineTo(x, y); ctx.lineTo(x + lineLen, y);
-                    // 右上
                     ctx.moveTo(x + width - lineLen, y); ctx.lineTo(x + width, y); ctx.lineTo(x + width, y + lineLen);
-                    // 右下
                     ctx.moveTo(x + width, y + height - lineLen); ctx.lineTo(x + width, y + height); ctx.lineTo(x + width - lineLen, y + height);
-                    // 左下
                     ctx.moveTo(x + lineLen, y + height); ctx.lineTo(x, y + height); ctx.lineTo(x, y + height - lineLen);
                     ctx.stroke();
 
-                    // 标签背景
                     ctx.fillStyle = color;
                     ctx.fillRect(x, y - 25, width, 25);
                     ctx.fillStyle = 'black';
@@ -400,17 +389,25 @@
         const isEffectivelyDangerous = (now - lastDangerTime < DANGER_HOLD_TIME);
 
         if (isEffectivelyDangerous) {
-            tryPlayBeep();
+            // --- 核心修改：根据警报模式触发 ---
+            const shouldBeep = (alertMode === 0 || alertMode === 2);
+            const shouldVibrate = (alertMode === 1 || alertMode === 2);
+
+            if (shouldBeep) tryPlayBeep();
+            
+            // 震动有自己的频率控制，这里通过时间差简单控制
+            if (shouldVibrate) {
+                // 确保震动不跟声音冲突，简单的间隔控制
+                if (now - lastBeepTime < 50) tryVibrate(); 
+            }
+            
             sendNotification();
             
-            // 网页端的视觉警告 (红色边缘闪烁)
             dangerOverlay.style.display = 'block';
 
-            // Canvas 内部的视觉警告 (给 PiP 用的)
             ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // 绘制警告图标
             ctx.fillStyle = 'white';
             ctx.strokeStyle = 'white';
             ctx.lineWidth = 5;
@@ -425,8 +422,12 @@
             ctx.textAlign = 'center';
             ctx.fillText("!", canvas.width/2, canvas.height/2 + 35);
             
+            // 显示具体的警告模式文字
+            let warningText = "WARNING";
+            if (alertMode === 1) warningText = "SILENT WARN";
+            
             ctx.font = 'bold 40px "Rajdhani"';
-            ctx.fillText("WARNING", canvas.width/2, canvas.height/2 + 100);
+            ctx.fillText(warningText, canvas.width/2, canvas.height/2 + 100);
         } else {
             dangerOverlay.style.display = 'none';
         }
@@ -443,8 +444,6 @@
     function toggleEcoMode() {
         if (isIOS) alert("Note: iOS screen dimming manual required.");
         isEcoMode = !isEcoMode;
-        
-        // 按钮样式切换
         if (isEcoMode) {
             ecoBtn.classList.add('active');
             ecoBtn.querySelector('span:last-child').innerText = "ON";
@@ -452,6 +451,36 @@
             ecoBtn.classList.remove('active');
             ecoBtn.querySelector('span:last-child').innerText = "OFF";
         }
+    }
+    
+    // --- 新增：切换警报模式函数 ---
+    function toggleAlertMode() {
+        alertMode = (alertMode + 1) % 3; // 0 -> 1 -> 2 -> 0 循环
+        
+        let label = "";
+        let icon = "";
+        
+        switch(alertMode) {
+            case 0: // Sound Only
+                label = "SOUND ONLY";
+                icon = "🔊 SOUND";
+                modeBtn.classList.remove('active'); // 白色
+                break;
+            case 1: // Vibrate Only
+                label = "VIB ONLY";
+                icon = "📳 VIBRATE";
+                modeBtn.classList.add('active'); // 亮色，提示静音模式也是激活状态
+                if (isIOS) alert("iPhone注意：\nWebサイトからの振動はiOSでブロックされています。\n(画面の点滅のみ機能します)");
+                break;
+            case 2: // Both
+                label = "SOUND+VIB";
+                icon = "🚨 BOTH";
+                modeBtn.classList.add('active'); // 亮色
+                break;
+        }
+        
+        modeBtn.querySelector('span:first-child').innerText = icon;
+        modeText.innerText = label;
     }
 
     async function togglePiP() {
