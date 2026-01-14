@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WalkSafe AI Ultimate</title>
+    <title>WalkSafe AI Ultimate (Precision)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
@@ -45,8 +45,7 @@
             text-shadow: 0 0 5px var(--primary-color); letter-spacing: 1px;
         }
 
-        /* === 1. 上层功能控制台 (3个按钮) === */
-        /* 位置上移，给底部横条腾出空间 */
+        /* === 1. 上层功能控制台 === */
         #control-panel {
             position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
             width: 90%; max-width: 400px;
@@ -60,7 +59,7 @@
 
         .ctrl-btn {
             background: transparent; border: 1px solid rgba(255,255,255,0.3);
-            color: white; padding: 8px 0; width: 32%; /* 恢复宽按钮 */
+            color: white; padding: 8px 0; width: 32%; 
             border-radius: 12px;
             font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 14px;
             cursor: pointer; transition: all 0.2s;
@@ -74,11 +73,11 @@
             box-shadow: 0 0 10px rgba(0, 243, 255, 0.3);
         }
         
-        /* === 2. 底部终止横条 (新) === */
+        /* === 2. 底部终止横条 === */
         #stop-bar {
             position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%);
             width: 90%; max-width: 400px; height: 50px;
-            background: rgba(50, 0, 0, 0.8); /* 深红背景 */
+            background: rgba(50, 0, 0, 0.8);
             backdrop-filter: blur(5px);
             border: 1px solid rgba(255, 42, 42, 0.6);
             border-radius: 12px;
@@ -176,7 +175,7 @@
     // UI Elements
     const startScreen = document.getElementById('start-screen');
     const controlPanel = document.getElementById('control-panel');
-    const stopBar = document.getElementById('stop-bar'); // 新增
+    const stopBar = document.getElementById('stop-bar');
     const topBar = document.getElementById('top-bar');
     const scanLine = document.getElementById('scan-line');
     const dangerOverlay = document.getElementById('danger-overlay');
@@ -192,7 +191,7 @@
     let isDetecting = false; 
     
     let lastPredictionTime = 0;
-    const PREDICTION_INTERVAL = 200; 
+    const PREDICTION_INTERVAL = 150; // 稍微加快检测频率以配合防抖
     const CONFIDENCE_THRESHOLD = 0.6; 
     
     let lastDangerTime = 0;        
@@ -203,6 +202,12 @@
     
     let lastVibrateTime = 0;
     const VIBRATE_INTERVAL = 1000;
+
+    // === 新增：防抖动与聚焦逻辑参数 ===
+    let dangerFrameCount = 0;          // 连续危险帧计数器
+    const DANGER_TRIGGER_FRAMES = 3;   // 需要连续3帧才触发 (方案 B)
+    const ROI_X_MIN = 0.25;            // 屏幕左侧 25%
+    const ROI_X_MAX = 0.75;            // 屏幕右侧 75% (即只检测中间50%) (方案 A)
 
     let alertMode = 2; // Default: Both
     
@@ -230,12 +235,11 @@
             }
             
             await setupCamera();
-            
             if (navigator.vibrate) navigator.vibrate(50);
 
             topBar.style.display = 'flex';
             controlPanel.style.display = 'flex'; 
-            stopBar.style.display = 'flex'; // 显示底部横条
+            stopBar.style.display = 'flex';
             scanLine.style.display = 'block';
 
             if (isIOS) {
@@ -276,20 +280,17 @@
         }
 
         if (animationId) cancelAnimationFrame(animationId);
-
-        if (audioCtx) {
-            audioCtx.close().then(() => { audioCtx = null; });
-        }
-
-        if (document.pictureInPictureElement) {
-            document.exitPictureInPicture().catch(()=>{});
-        }
+        if (audioCtx) audioCtx.close().then(() => { audioCtx = null; });
+        if (document.pictureInPictureElement) document.exitPictureInPicture().catch(()=>{});
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 重置防抖计数器
+        dangerFrameCount = 0;
 
         topBar.style.display = 'none';
         controlPanel.style.display = 'none';
-        stopBar.style.display = 'none'; // 隐藏底部横条
+        stopBar.style.display = 'none';
         scanLine.style.display = 'none';
         dangerOverlay.style.display = 'none';
         
@@ -390,22 +391,34 @@
         if (isEcoMode) {
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // Eco mode drawing...
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
-            const angle = (frameCount * 0.05) % (Math.PI * 2);
             ctx.strokeStyle = 'rgba(0, 243, 255, 0.3)';
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.moveTo(centerX, centerY);
-            ctx.lineTo(centerX + Math.cos(angle) * 100, centerY + Math.sin(angle) * 100);
+            ctx.arc(centerX, centerY, 50, 0, Math.PI * 2);
             ctx.stroke();
-            const alpha = 0.5 + Math.sin(frameCount * 0.1) * 0.4;
-            ctx.fillStyle = `rgba(0, 243, 255, ${alpha})`;
+            ctx.fillStyle = `rgba(0, 243, 255, 0.5)`;
             ctx.font = '20px "Rajdhani"';
             ctx.textAlign = 'center';
-            ctx.fillText("ECO SURVEILLANCE ACTIVE", centerX, centerY + 140);
+            ctx.fillText("ECO SURVEILLANCE ACTIVE", centerX, centerY + 100);
         } else {
             if (canvas.width > 0) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // === 绘制 方案A 的视觉辅助线 (中间的安全通道) ===
+            const leftLine = canvas.width * ROI_X_MIN;
+            const rightLine = canvas.width * ROI_X_MAX;
+            
+            ctx.setLineDash([5, 15]); // 虚线
+            ctx.strokeStyle = 'rgba(0, 243, 255, 0.3)'; // 淡淡的青色
+            ctx.lineWidth = 2;
+            
+            ctx.beginPath();
+            ctx.moveTo(leftLine, 0); ctx.lineTo(leftLine, canvas.height);
+            ctx.moveTo(rightLine, 0); ctx.lineTo(rightLine, canvas.height);
+            ctx.stroke();
+            ctx.setLineDash([]); // 恢复实线
         }
 
         if (!isDetecting && (now - lastPredictionTime > PREDICTION_INTERVAL) && model) {
@@ -427,35 +440,67 @@
 
     function processPredictions(predictions) {
         let currentFrameDangerous = false;
+        
         predictions.forEach(prediction => {
             if (['person', 'car', 'truck', 'bus'].includes(prediction.class)) {
                 const [x, y, width, height] = prediction.bbox;
+                
+                // === 方案A: 计算物体中心点，判断是否在核心区域 ===
+                const centerX = x + width / 2;
+                const centerXRatio = centerX / canvas.width;
+                const inSafeZone = (centerXRatio > ROI_X_MIN && centerXRatio < ROI_X_MAX);
+                
+                // === 大小判定 ===
                 const ratio = height / video.videoHeight;
-                const isDanger = ratio > 0.45;
+                const isBigEnough = ratio > 0.45;
+                
+                // 只有 “既足够大” 又 “在中间区域” 才算危险
+                const isDanger = isBigEnough && inSafeZone;
 
                 if (!isEcoMode) {
-                    const color = isDanger ? '#ff2a2a' : '#00f3ff';
+                    // 只有危险物体标红，旁边路过的标蓝
+                    const color = isDanger ? '#ff2a2a' : 'rgba(0, 243, 255, 0.4)'; 
+                    
+                    // 如果不在中间区域，降低不透明度，表示被系统忽略
+                    ctx.globalAlpha = inSafeZone ? 1.0 : 0.5;
+                    
                     const lineLen = width * 0.2;
                     ctx.strokeStyle = color;
-                    ctx.lineWidth = 4;
+                    ctx.lineWidth = inSafeZone ? 4 : 2;
                     ctx.beginPath();
                     ctx.moveTo(x, y + lineLen); ctx.lineTo(x, y); ctx.lineTo(x + lineLen, y);
                     ctx.moveTo(x + width - lineLen, y); ctx.lineTo(x + width, y); ctx.lineTo(x + width, y + lineLen);
                     ctx.moveTo(x + width, y + height - lineLen); ctx.lineTo(x + width, y + height); ctx.lineTo(x + width - lineLen, y + height);
                     ctx.moveTo(x + lineLen, y + height); ctx.lineTo(x, y + height); ctx.lineTo(x, y + height - lineLen);
                     ctx.stroke();
+                    
+                    ctx.globalAlpha = 1.0;
 
-                    ctx.fillStyle = color;
-                    ctx.fillRect(x, y - 25, width, 25);
-                    ctx.fillStyle = 'black';
-                    ctx.font = 'bold 16px "Rajdhani"';
-                    ctx.textAlign = 'left';
-                    ctx.fillText(prediction.class.toUpperCase() + " " + Math.round(prediction.score*100) + "%", x + 5, y - 7);
+                    if (inSafeZone) {
+                        ctx.fillStyle = color;
+                        ctx.fillRect(x, y - 25, width, 25);
+                        ctx.fillStyle = 'black';
+                        ctx.font = 'bold 16px "Rajdhani"';
+                        ctx.textAlign = 'left';
+                        ctx.fillText(prediction.class.toUpperCase() + " " + Math.round(prediction.score*100) + "%", x + 5, y - 7);
+                    }
                 }
+                
                 if (isDanger) currentFrameDangerous = true;
             }
         });
-        if (currentFrameDangerous) lastDangerTime = Date.now();
+
+        // === 方案B: 防抖逻辑 (Debounce) ===
+        if (currentFrameDangerous) {
+            dangerFrameCount++; // 危险帧 +1
+        } else {
+            dangerFrameCount = 0; // 一旦中断，立即重置 (为了解决误报，我们采用严格重置)
+        }
+
+        // 只有连续积累了3帧危险，才真正触发全局警报时间
+        if (dangerFrameCount >= DANGER_TRIGGER_FRAMES) {
+            lastDangerTime = Date.now();
+        }
     }
 
     function renderStatus() {
@@ -468,9 +513,10 @@
             sendNotification();
             
             dangerOverlay.style.display = 'block';
+            
+            // 绘制警告图标
             ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
             ctx.fillStyle = 'white';
             ctx.strokeStyle = 'white';
             ctx.lineWidth = 5;
@@ -480,7 +526,6 @@
             ctx.lineTo(canvas.width/2 + 50, canvas.height/2 + 50);
             ctx.closePath();
             ctx.stroke();
-            
             ctx.font = 'bold 60px "Rajdhani"';
             ctx.textAlign = 'center';
             ctx.fillText("!", canvas.width/2, canvas.height/2 + 35);
