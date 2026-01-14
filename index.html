@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>歩きスマホ防止 (安定版)</title>
+    <title>歩きスマホ防止 (高速応答版)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
@@ -40,7 +40,7 @@
 </head>
 <body>
 
-    <button id="start-btn" onclick="startSystem()">システムを開始<br>(安定化版)</button>
+    <button id="start-btn" onclick="startSystem()">システムを開始<br>(高速応答)</button>
     
     <div id="status" style="display:none;">待機中...</div>
 
@@ -71,12 +71,12 @@
     const PREDICTION_INTERVAL = 200; 
     const CONFIDENCE_THRESHOLD = 0.6; 
     
-    // --- 新增：状态稳定变量 ---
-    let lastDangerTime = 0;        // 上一次检测到危险的时间
-    const DANGER_HOLD_TIME = 1500; // 危险状态保持 1.5 秒 (防止闪烁)
+    // --- 调整参数：更灵敏 ---
+    let lastDangerTime = 0;        
+    const DANGER_HOLD_TIME = 800;  // 改为 0.8秒 (既不闪烁，也不拖沓)
     
     let lastBeepTime = 0;
-    const BEEP_INTERVAL = 600;     // 声音报警间隔 (毫秒)，防止声音鬼畜
+    const BEEP_INTERVAL = 500;     // 改为 0.5秒 (声音节奏更快一点)
     
     let pipTarget = video; 
     let frameCount = 0; 
@@ -88,11 +88,9 @@
         status.innerText = "システム起動中...";
         
         try {
-            // 1. 初始化音频 (必须在用户点击事件中完成)
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) {
                 audioCtx = new AudioContext();
-                // 如果是暂停状态，立即恢复
                 if (audioCtx.state === 'suspended') {
                     await audioCtx.resume();
                 }
@@ -106,7 +104,6 @@
             await setupCamera();
             
             if (isIOS) {
-                console.log("iOS Mode: Raw Video");
                 pipTarget = video; 
             } else {
                 try {
@@ -148,37 +145,29 @@
         oscillator.start();
     }
 
-    // --- 修复：更稳定的报警音 ---
     function tryPlayBeep() {
         if (!audioCtx) return;
         const now = Date.now();
-        
-        // 限制频率：如果距离上次报警不足 600ms，就不响
         if (now - lastBeepTime < BEEP_INTERVAL) return;
         
         lastBeepTime = now;
-
         if (audioCtx.state === 'suspended') audioCtx.resume();
 
         try {
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
-            
-            oscillator.type = 'square'; // 方波声音更刺耳，适合报警
+            oscillator.type = 'square'; 
             oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
-            oscillator.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.2);
+            oscillator.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.15); //稍微缩短声音长度
             
             gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
             
             oscillator.connect(gainNode);
             gainNode.connect(audioCtx.destination);
-            
             oscillator.start();
-            oscillator.stop(audioCtx.currentTime + 0.2);
-        } catch(e) {
-            console.error(e);
-        }
+            oscillator.stop(audioCtx.currentTime + 0.15);
+        } catch(e) {}
     }
 
     function sendNotification() {
@@ -235,7 +224,6 @@
         if (video.paused) video.play().catch(()=>{});
         if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 
-        // 1. 底层绘制
         if (isEcoMode) {
             ctx.fillStyle = 'black';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -250,11 +238,10 @@
             }
         }
 
-        // 2. 检测逻辑
         if (!isDetecting && (now - lastPredictionTime > PREDICTION_INTERVAL) && model) {
             isDetecting = true;
             model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
-                processPredictions(predictions); // 处理检测结果
+                processPredictions(predictions);
                 lastPredictionTime = performance.now();
                 isDetecting = false;
                 scheduleNextFrame(); 
@@ -263,13 +250,11 @@
                 scheduleNextFrame();
             });
         } else {
-            // 即使没检测，也要根据“记忆”来渲染
             renderStatus(); 
             scheduleNextFrame();
         }
     }
 
-    // --- 新增：分离检测和渲染逻辑 ---
     function processPredictions(predictions) {
         let currentFrameDangerous = false;
 
@@ -278,7 +263,6 @@
                 const [x, y, width, height] = prediction.bbox;
                 const objectRatio = height / video.videoHeight;
                 
-                // 画框框（只在非省电模式下画）
                 if (!isEcoMode) {
                     ctx.strokeStyle = objectRatio > 0.45 ? '#FF0000' : '#00FF00';
                     ctx.lineWidth = 4;
@@ -291,27 +275,20 @@
             }
         });
 
-        // 如果这一帧危险，刷新“最后危险时间”
         if (currentFrameDangerous) {
             lastDangerTime = Date.now();
         }
     }
 
-    // --- 新增：统一渲染与报警状态 ---
     function renderStatus() {
         const now = Date.now();
-        // 核心逻辑：如果当前时间 距离 上次危险时间 小于 1.5秒，就认为还在危险中
+        // 如果当前时间 距离 上次危险时间 小于 800ms，保持报警
         const isEffectivelyDangerous = (now - lastDangerTime < DANGER_HOLD_TIME);
 
         if (isEffectivelyDangerous) {
-            // 1. 报警音 (带频率限制)
             tryPlayBeep();
-            
-            // 2. 发通知 (带频率限制)
             sendNotification();
 
-            // 3. 视觉报警 (覆盖红层)
-            // 只有当持续危险时，这个红色覆盖层才会一直显示，不会闪烁
             ctx.fillStyle = 'rgba(255, 0, 0, 0.6)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
