@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WalkSafe AI Ultimate (Fixed)</title>
+    <title>WalkSafe AI Ultimate</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
@@ -35,7 +35,7 @@
 
         #top-bar {
             position: absolute; top: 0; left: 0; width: 100%; height: 60px;
-            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+            background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent);
             z-index: 10; display: flex; align-items: center; justify-content: space-between;
             padding: 0 20px; box-sizing: border-box; pointer-events: none;
         }
@@ -45,9 +45,11 @@
             text-shadow: 0 0 5px var(--primary-color); letter-spacing: 1px;
         }
 
+        /* === 1. 上层功能控制台 (3个按钮) === */
+        /* 位置上移，给底部横条腾出空间 */
         #control-panel {
-            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
-            width: 95%; max-width: 450px;
+            position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
+            width: 90%; max-width: 400px;
             background: var(--bg-glass);
             backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
             border: 1px solid var(--border-glass);
@@ -58,7 +60,7 @@
 
         .ctrl-btn {
             background: transparent; border: 1px solid rgba(255,255,255,0.3);
-            color: white; padding: 8px 0; width: 32%; 
+            color: white; padding: 8px 0; width: 32%; /* 恢复宽按钮 */
             border-radius: 12px;
             font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 14px;
             cursor: pointer; transition: all 0.2s;
@@ -71,11 +73,36 @@
             color: var(--primary-color);
             box-shadow: 0 0 10px rgba(0, 243, 255, 0.3);
         }
+        
+        /* === 2. 底部终止横条 (新) === */
+        #stop-bar {
+            position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%);
+            width: 90%; max-width: 400px; height: 50px;
+            background: rgba(50, 0, 0, 0.8); /* 深红背景 */
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 42, 42, 0.6);
+            border-radius: 12px;
+            display: flex; justify-content: center; align-items: center;
+            cursor: pointer; z-index: 20; display: none;
+            transition: all 0.2s;
+            box-shadow: 0 0 15px rgba(0,0,0,0.5);
+        }
+        
+        #stop-bar:active {
+            transform: translateX(-50%) scale(0.98);
+            background: rgba(255, 42, 42, 0.4);
+        }
+        
+        .stop-text {
+            color: #ff4d4d; font-size: 16px; font-weight: bold; letter-spacing: 3px;
+            text-shadow: 0 0 5px rgba(255, 42, 42, 0.5);
+        }
 
         #start-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: black; z-index: 50;
             display: flex; flex-direction: column; justify-content: center; align-items: center;
+            transition: opacity 0.5s;
         }
         .glow-circle {
             width: 120px; height: 120px; border-radius: 50%;
@@ -113,6 +140,7 @@
         <div class="status-badge">● LIVE</div>
         <div class="status-badge" id="fps-badge">AI: READY</div>
     </div>
+    
     <div class="scan-line" id="scan-line"></div>
     <div id="danger-overlay"></div>
 
@@ -134,6 +162,10 @@
             <span style="font-size:10px; opacity:0.7">OPEN</span>
         </button>
     </div>
+    
+    <div id="stop-bar" onclick="stopSystem()">
+        <span class="stop-text">🛑 SYSTEM TERMINATE</span>
+    </div>
 
 <script>
     const video = document.getElementById('video');
@@ -144,6 +176,7 @@
     // UI Elements
     const startScreen = document.getElementById('start-screen');
     const controlPanel = document.getElementById('control-panel');
+    const stopBar = document.getElementById('stop-bar'); // 新增
     const topBar = document.getElementById('top-bar');
     const scanLine = document.getElementById('scan-line');
     const dangerOverlay = document.getElementById('danger-overlay');
@@ -153,9 +186,11 @@
     const modeText = document.getElementById('mode-text');
 
     let model = null;
+    let isSystemRunning = false; 
     let isEcoMode = false;
     let audioCtx = null;
     let isDetecting = false; 
+    
     let lastPredictionTime = 0;
     const PREDICTION_INTERVAL = 200; 
     const CONFIDENCE_THRESHOLD = 0.6; 
@@ -163,22 +198,25 @@
     let lastDangerTime = 0;        
     const DANGER_HOLD_TIME = 800;  
     
-    // --- 独立的时间管理 ---
     let lastBeepTime = 0;
     const BEEP_INTERVAL = 500;     
     
     let lastVibrateTime = 0;
-    const VIBRATE_INTERVAL = 1000; // 震动间隔控制（避免震动太频繁导致麻木）
+    const VIBRATE_INTERVAL = 1000;
 
-    let alertMode = 2; // 2 = Both
+    let alertMode = 2; // Default: Both
     
     let pipTarget = video; 
     let frameCount = 0; 
     const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    let animationId = null; 
 
     async function startSystem() {
-        startScreen.style.display = 'none';
+        startScreen.style.opacity = '0';
+        setTimeout(() => startScreen.style.display = 'none', 500);
         
+        isSystemRunning = true; 
+
         try {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) {
@@ -193,11 +231,11 @@
             
             await setupCamera();
             
-            // 预先尝试一次震动，以获取浏览器权限
-            if (navigator.vibrate) navigator.vibrate(100);
+            if (navigator.vibrate) navigator.vibrate(50);
 
             topBar.style.display = 'flex';
-            controlPanel.style.display = 'flex';
+            controlPanel.style.display = 'flex'; 
+            stopBar.style.display = 'flex'; // 显示底部横条
             scanLine.style.display = 'block';
 
             if (isIOS) {
@@ -221,25 +259,59 @@
 
         } catch (err) {
             alert("System Error: " + err.message);
-            startScreen.style.display = 'flex'; 
+            stopSystem(); 
         }
+    }
+
+    function stopSystem() {
+        isSystemRunning = false;
+        
+        if (video.srcObject) {
+            video.srcObject.getTracks().forEach(track => track.stop());
+            video.srcObject = null;
+        }
+        if (pipVideo.srcObject) {
+            try { pipVideo.srcObject.getTracks().forEach(track => track.stop()); } catch(e){}
+            pipVideo.srcObject = null;
+        }
+
+        if (animationId) cancelAnimationFrame(animationId);
+
+        if (audioCtx) {
+            audioCtx.close().then(() => { audioCtx = null; });
+        }
+
+        if (document.pictureInPictureElement) {
+            document.exitPictureInPicture().catch(()=>{});
+        }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        topBar.style.display = 'none';
+        controlPanel.style.display = 'none';
+        stopBar.style.display = 'none'; // 隐藏底部横条
+        scanLine.style.display = 'none';
+        dangerOverlay.style.display = 'none';
+        
+        startScreen.style.display = 'flex';
+        setTimeout(() => startScreen.style.opacity = '1', 50);
     }
 
     function startSilentHeartbeat() {
         if (!audioCtx) return;
-        const o = audioCtx.createOscillator();
-        const g = audioCtx.createGain();
-        o.connect(g); g.connect(audioCtx.destination);
-        o.start(); g.gain.value = 0.0001;
+        try {
+            const o = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            o.connect(g); g.connect(audioCtx.destination);
+            o.start(); g.gain.value = 0.0001;
+        } catch(e){}
     }
 
     function tryPlayBeep() {
-        if (!audioCtx) return;
+        if (!audioCtx || !isSystemRunning) return;
         const now = Date.now();
         if (now - lastBeepTime < BEEP_INTERVAL) return;
-        
-        lastBeepTime = now; // 更新声音时间戳
-        
+        lastBeepTime = now;
         if (audioCtx.state === 'suspended') audioCtx.resume();
 
         try {
@@ -255,17 +327,11 @@
         } catch(e) {}
     }
 
-    // --- 修复后的震动逻辑 ---
     function tryVibrate() {
-        if (!navigator.vibrate) return;
-        
+        if (!navigator.vibrate || !isSystemRunning) return;
         const now = Date.now();
-        // 独立的震动时间检查
         if (now - lastVibrateTime < VIBRATE_INTERVAL) return;
-        
-        lastVibrateTime = now; // 更新震动时间戳
-
-        // 强力震动模式：短震-停-短震 (模拟心跳)
+        lastVibrateTime = now;
         navigator.vibrate([200, 50, 200]); 
     }
 
@@ -299,12 +365,15 @@
     }
 
     async function loadModel() {
+        if(!isSystemRunning) return;
         fpsBadge.innerText = "LOADING AI...";
         try {
-            model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-            fpsBadge.innerText = "SYSTEM ACTIVE";
-            fpsBadge.style.color = "#00f3ff";
-            detectFrame();
+            if (!model) model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+            if(isSystemRunning) {
+                fpsBadge.innerText = "SYSTEM ACTIVE";
+                fpsBadge.style.color = "#00f3ff";
+                detectFrame();
+            }
         } catch(e) {
             fpsBadge.innerText = "AI ERROR";
             fpsBadge.style.color = "red";
@@ -312,9 +381,11 @@
     }
 
     function detectFrame() {
+        if (!isSystemRunning) return;
+
         const now = performance.now();
         frameCount++;
-        if (video.paused) video.play().catch(()=>{});
+        if (video.paused && video.srcObject) video.play().catch(()=>{});
         
         if (isEcoMode) {
             ctx.fillStyle = '#000000';
@@ -340,7 +411,7 @@
         if (!isDetecting && (now - lastPredictionTime > PREDICTION_INTERVAL) && model) {
             isDetecting = true;
             model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
-                processPredictions(predictions);
+                if(isSystemRunning) processPredictions(predictions);
                 lastPredictionTime = performance.now();
                 isDetecting = false;
                 scheduleNextFrame(); 
@@ -356,7 +427,6 @@
 
     function processPredictions(predictions) {
         let currentFrameDangerous = false;
-        
         predictions.forEach(prediction => {
             if (['person', 'car', 'truck', 'bus'].includes(prediction.class)) {
                 const [x, y, width, height] = prediction.bbox;
@@ -382,11 +452,9 @@
                     ctx.textAlign = 'left';
                     ctx.fillText(prediction.class.toUpperCase() + " " + Math.round(prediction.score*100) + "%", x + 5, y - 7);
                 }
-
                 if (isDanger) currentFrameDangerous = true;
             }
         });
-
         if (currentFrameDangerous) lastDangerTime = Date.now();
     }
 
@@ -395,22 +463,11 @@
         const isEffectivelyDangerous = (now - lastDangerTime < DANGER_HOLD_TIME);
 
         if (isEffectivelyDangerous) {
-            // --- 核心修正：解耦声音和震动 ---
-            
-            // 1. 声音检查
-            if (alertMode === 0 || alertMode === 2) {
-                tryPlayBeep();
-            }
-            
-            // 2. 震动检查 (完全独立，不再依赖声音时间戳)
-            if (alertMode === 1 || alertMode === 2) {
-                tryVibrate();
-            }
-            
+            if (alertMode === 0 || alertMode === 2) tryPlayBeep();
+            if (alertMode === 1 || alertMode === 2) tryVibrate();
             sendNotification();
             
             dangerOverlay.style.display = 'block';
-
             ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
@@ -430,7 +487,6 @@
             
             let warningText = "WARNING";
             if (alertMode === 1) warningText = "SILENT WARN";
-            
             ctx.font = 'bold 40px "Rajdhani"';
             ctx.fillText(warningText, canvas.width/2, canvas.height/2 + 100);
         } else {
@@ -439,14 +495,16 @@
     }
 
     function scheduleNextFrame() {
+        if (!isSystemRunning) return;
         if (document.hidden || document.pictureInPictureElement) {
             setTimeout(detectFrame, 50); 
         } else {
-            requestAnimationFrame(detectFrame);
+            animationId = requestAnimationFrame(detectFrame);
         }
     }
 
     function toggleEcoMode() {
+        if(!isSystemRunning) return;
         if (isIOS) alert("Note: iOS screen dimming manual required.");
         isEcoMode = !isEcoMode;
         if (isEcoMode) {
@@ -459,38 +517,24 @@
     }
     
     function toggleAlertMode() {
+        if(!isSystemRunning) return;
         alertMode = (alertMode + 1) % 3; 
         
         let label = "";
         let icon = "";
-        
         switch(alertMode) {
-            case 0: // Sound Only
-                label = "SOUND ONLY";
-                icon = "🔊 SOUND";
-                modeBtn.classList.remove('active'); 
-                break;
-            case 1: // Vibrate Only
-                label = "VIB ONLY";
-                icon = "📳 VIBRATE";
-                modeBtn.classList.add('active'); 
-                if (isIOS) alert("iPhone注意：\nWebサイトからの振動はiOSでブロックされています。\n(画面の点滅のみ機能します)");
-                break;
-            case 2: // Both
-                label = "SOUND+VIB";
-                icon = "🚨 BOTH";
-                modeBtn.classList.add('active'); 
-                break;
+            case 0: label = "SOUND ONLY"; icon = "🔊 SOUND"; modeBtn.classList.remove('active'); break;
+            case 1: label = "VIB ONLY"; icon = "📳 VIBRATE"; modeBtn.classList.add('active'); 
+                    if (isIOS) alert("iPhone注意：\nWebサイトからの振動はiOSでブロックされています。"); break;
+            case 2: label = "SOUND+VIB"; icon = "🚨 BOTH"; modeBtn.classList.add('active'); break;
         }
-        
         modeBtn.querySelector('span:first-child').innerText = icon;
         modeText.innerText = label;
-        
-        // 切换时轻微震动一下，确认震动功能开启
         if (alertMode > 0 && navigator.vibrate) navigator.vibrate(50);
     }
 
     async function togglePiP() {
+        if(!isSystemRunning) return;
         try {
             if (document.pictureInPictureElement) {
                 await document.exitPictureInPicture();
