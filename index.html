@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WalkSafe AI Ultimate</title>
+    <title>WalkSafe AI Ultimate (Fixed)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
@@ -25,7 +25,6 @@
         #video, #pip-video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
 
-        /* 扫描线 */
         .scan-line {
             position: absolute; top: 0; left: 0; width: 100%; height: 5px;
             background: linear-gradient(to right, transparent, var(--primary-color), transparent);
@@ -34,7 +33,6 @@
         }
         @keyframes scan { 0% { top: 0%; } 100% { top: 100%; } }
 
-        /* 顶部状态栏 */
         #top-bar {
             position: absolute; top: 0; left: 0; width: 100%; height: 60px;
             background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
@@ -47,7 +45,6 @@
             text-shadow: 0 0 5px var(--primary-color); letter-spacing: 1px;
         }
 
-        /* 底部控制台 (调整为容纳3个按钮) */
         #control-panel {
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
             width: 95%; max-width: 450px;
@@ -61,7 +58,7 @@
 
         .ctrl-btn {
             background: transparent; border: 1px solid rgba(255,255,255,0.3);
-            color: white; padding: 8px 0; width: 32%; /* 变窄以放下3个按钮 */
+            color: white; padding: 8px 0; width: 32%; 
             border-radius: 12px;
             font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 14px;
             cursor: pointer; transition: all 0.2s;
@@ -75,7 +72,6 @@
             box-shadow: 0 0 10px rgba(0, 243, 255, 0.3);
         }
 
-        /* 启动屏幕 */
         #start-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: black; z-index: 50;
@@ -96,7 +92,6 @@
         .start-text { font-size: 18px; font-weight: bold; color: var(--primary-color); }
         .sub-text { margin-top: 20px; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 2px;}
 
-        /* 警告覆盖层 */
         #danger-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: radial-gradient(circle, transparent 40%, rgba(255, 0, 0, 0.8) 100%);
@@ -168,12 +163,14 @@
     let lastDangerTime = 0;        
     const DANGER_HOLD_TIME = 800;  
     
+    // --- 独立的时间管理 ---
     let lastBeepTime = 0;
     const BEEP_INTERVAL = 500;     
     
-    // --- 新增：警报模式状态 ---
-    // 0: Sound Only, 1: Vibrate Only, 2: Both
-    let alertMode = 2; 
+    let lastVibrateTime = 0;
+    const VIBRATE_INTERVAL = 1000; // 震动间隔控制（避免震动太频繁导致麻木）
+
+    let alertMode = 2; // 2 = Both
     
     let pipTarget = video; 
     let frameCount = 0; 
@@ -196,6 +193,9 @@
             
             await setupCamera();
             
+            // 预先尝试一次震动，以获取浏览器权限
+            if (navigator.vibrate) navigator.vibrate(100);
+
             topBar.style.display = 'flex';
             controlPanel.style.display = 'flex';
             scanLine.style.display = 'block';
@@ -233,12 +233,13 @@
         o.start(); g.gain.value = 0.0001;
     }
 
-    // --- 警报功能函数 (Sound) ---
     function tryPlayBeep() {
         if (!audioCtx) return;
         const now = Date.now();
         if (now - lastBeepTime < BEEP_INTERVAL) return;
-        lastBeepTime = now;
+        
+        lastBeepTime = now; // 更新声音时间戳
+        
         if (audioCtx.state === 'suspended') audioCtx.resume();
 
         try {
@@ -254,13 +255,18 @@
         } catch(e) {}
     }
 
-    // --- 警报功能函数 (Vibration) ---
+    // --- 修复后的震动逻辑 ---
     function tryVibrate() {
-        // iOS Safari 不支持 navigator.vibrate，这里会静默失败
-        if (navigator.vibrate) {
-            // 震动 200ms
-            navigator.vibrate([200]);
-        }
+        if (!navigator.vibrate) return;
+        
+        const now = Date.now();
+        // 独立的震动时间检查
+        if (now - lastVibrateTime < VIBRATE_INTERVAL) return;
+        
+        lastVibrateTime = now; // 更新震动时间戳
+
+        // 强力震动模式：短震-停-短震 (模拟心跳)
+        navigator.vibrate([200, 50, 200]); 
     }
 
     function sendNotification() {
@@ -389,16 +395,16 @@
         const isEffectivelyDangerous = (now - lastDangerTime < DANGER_HOLD_TIME);
 
         if (isEffectivelyDangerous) {
-            // --- 核心修改：根据警报模式触发 ---
-            const shouldBeep = (alertMode === 0 || alertMode === 2);
-            const shouldVibrate = (alertMode === 1 || alertMode === 2);
-
-            if (shouldBeep) tryPlayBeep();
+            // --- 核心修正：解耦声音和震动 ---
             
-            // 震动有自己的频率控制，这里通过时间差简单控制
-            if (shouldVibrate) {
-                // 确保震动不跟声音冲突，简单的间隔控制
-                if (now - lastBeepTime < 50) tryVibrate(); 
+            // 1. 声音检查
+            if (alertMode === 0 || alertMode === 2) {
+                tryPlayBeep();
+            }
+            
+            // 2. 震动检查 (完全独立，不再依赖声音时间戳)
+            if (alertMode === 1 || alertMode === 2) {
+                tryVibrate();
             }
             
             sendNotification();
@@ -422,7 +428,6 @@
             ctx.textAlign = 'center';
             ctx.fillText("!", canvas.width/2, canvas.height/2 + 35);
             
-            // 显示具体的警告模式文字
             let warningText = "WARNING";
             if (alertMode === 1) warningText = "SILENT WARN";
             
@@ -453,9 +458,8 @@
         }
     }
     
-    // --- 新增：切换警报模式函数 ---
     function toggleAlertMode() {
-        alertMode = (alertMode + 1) % 3; // 0 -> 1 -> 2 -> 0 循环
+        alertMode = (alertMode + 1) % 3; 
         
         let label = "";
         let icon = "";
@@ -464,23 +468,26 @@
             case 0: // Sound Only
                 label = "SOUND ONLY";
                 icon = "🔊 SOUND";
-                modeBtn.classList.remove('active'); // 白色
+                modeBtn.classList.remove('active'); 
                 break;
             case 1: // Vibrate Only
                 label = "VIB ONLY";
                 icon = "📳 VIBRATE";
-                modeBtn.classList.add('active'); // 亮色，提示静音模式也是激活状态
+                modeBtn.classList.add('active'); 
                 if (isIOS) alert("iPhone注意：\nWebサイトからの振動はiOSでブロックされています。\n(画面の点滅のみ機能します)");
                 break;
             case 2: // Both
                 label = "SOUND+VIB";
                 icon = "🚨 BOTH";
-                modeBtn.classList.add('active'); // 亮色
+                modeBtn.classList.add('active'); 
                 break;
         }
         
         modeBtn.querySelector('span:first-child').innerText = icon;
         modeText.innerText = label;
+        
+        // 切换时轻微震动一下，确认震动功能开启
+        if (alertMode > 0 && navigator.vibrate) navigator.vibrate(50);
     }
 
     async function togglePiP() {
