@@ -3,14 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WalkSafe AI Omni</title>
+    <title>WalkSafe AI Omni (Custom Fonts)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Press+Start+2P&display=swap" rel="stylesheet">
+    
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=DotGothic16&family=Oswald:wght@700&display=swap" rel="stylesheet">
+    
     <style>
-        /* === CSS 变量系统：一键换肤的核心 === */
+        /* === 1. 加载本地字体 === */
+        /* 请确保 impact.ttf 和 pixel.ttf 与此HTML在同一文件夹 */
+        
+        @font-face {
+            font-family: 'LocalImpact';
+            src: url('impact.ttf'); /* 读取重命名后的 Impact */
+        }
+        
+        @font-face {
+            font-family: 'LocalPixel';
+            src: url('pixel.ttf');  /* 读取重命名后的 May7 (全小素) */
+        }
+
         :root {
-            /* 默认: Cyber Style */
+            /* === 默认: Cyber Style === */
             --bg-color: #000000;
             --primary-color: #00f3ff;
             --secondary-color: rgba(0, 243, 255, 0.1);
@@ -28,61 +42,63 @@
             --btn-active-shadow: 0 0 10px var(--primary-color);
         }
 
-        /* 2. Modern Style (极简白) */
+        /* === Modern Style (极简白) === */
         [data-theme="modern"] {
             --bg-color: #f0f2f5;
-            --primary-color: #007aff; /* iOS Blue */
+            --primary-color: #007aff;
             --secondary-color: rgba(0, 122, 255, 0.1);
             --danger-color: #ff3b30;
             --text-color: #1d1d1f;
             --panel-bg: rgba(255, 255, 255, 0.85);
             --border-style: solid;
-            --border-width: 0px; /* 极简去边框 */
+            --border-width: 0px;
             --border-radius: 20px;
-            --font-main: 'Rajdhani', sans-serif; /* 依然用这个字体，因为它很窄，省空间 */
+            --font-main: 'Rajdhani', sans-serif;
             --blur-amt: 20px;
-            --scan-line-display: none; /* 去掉扫描线 */
+            --scan-line-display: none;
             --stop-bg: rgba(255, 59, 48, 0.9);
             --stop-border: transparent;
             --btn-active-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
         }
 
-        /* 3. Safety Style (工程黄) */
+        /* === Safety Style (工程黄 - Impact字体) === */
         [data-theme="safety"] {
-            --bg-color: #111;
-            --primary-color: #fbff00; /* Safety Yellow */
+            --bg-color: #000000;
+            --primary-color: #fbff00;
             --secondary-color: #333;
             --danger-color: #ff0000;
             --text-color: #fbff00;
-            --panel-bg: #000000;
+            --panel-bg: #1a1a1a;
             --border-style: solid;
-            --border-width: 4px; /* 粗框 */
-            --border-radius: 0px; /* 直角 */
-            --font-main: sans-serif; /* 最普通的字体，最清晰 */
-            --blur-amt: 0px; /* 无模糊 */
+            --border-width: 4px;
+            --border-radius: 0px;
+            /* 优先使用本地 LocalImpact */
+            --font-main: 'LocalImpact', 'Impact', 'Oswald', sans-serif; 
+            --blur-amt: 0px;
             --scan-line-display: none;
             --stop-bg: #ff0000;
             --stop-border: #ffffff;
             --btn-active-shadow: none;
         }
 
-        /* 4. Pixel Style (马里奥) */
+        /* === Pixel Style (全小素 May7 - 黑色字体) === */
         [data-theme="pixel"] {
-            --bg-color: #5c94fc; /* Mario Sky Blue */
-            --primary-color: #ffffff;
-            --secondary-color: #e86a17; /* Brick Red */
+            --bg-color: #5c94fc; 
+            --primary-color: #000000; 
+            --secondary-color: #e86a17; 
             --danger-color: #ff0000;
-            --text-color: #ffffff;
-            --panel-bg: #e86a17; /* 砖块色 */
+            --text-color: #000000; /* 纯黑字体 */
+            --panel-bg: #e86a17; 
             --border-style: dashed;
             --border-width: 4px;
             --border-radius: 0px;
-            --font-main: 'Press Start 2P', cursive; /* 像素字体 */
+            /* 优先使用本地 LocalPixel (全小素) */
+            --font-main: 'LocalPixel', 'DotGothic16', monospace; 
             --blur-amt: 0px;
             --scan-line-display: none;
             --stop-bg: #000000;
             --stop-border: #ffffff;
-            --btn-active-shadow: 4px 4px 0px #000000; /* 像素阴影 */
+            --btn-active-shadow: 4px 4px 0px #000000;
         }
 
         body { 
@@ -90,13 +106,12 @@
             font-family: var(--font-main);
             touch-action: manipulation;
             color: var(--text-color);
-            transition: background 0.5s, color 0.5s; /* 丝滑过渡 */
+            transition: background 0.5s, color 0.5s;
         }
         
         #video, #pip-video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
 
-        /* 特效层 (仅在 Cyber 模式显示) */
         .scan-line {
             position: absolute; top: 0; left: 0; width: 100%; height: 5px;
             background: linear-gradient(to right, transparent, var(--primary-color), transparent);
@@ -106,11 +121,10 @@
         }
         @keyframes scan { 0% { top: 0%; } 100% { top: 100%; } }
 
-        /* === 顶部栏 === */
         #top-bar {
             position: absolute; top: 0; left: 0; width: 100%; height: 70px;
             z-index: 10; display: flex; align-items: center; justify-content: space-between;
-            padding: 0 20px; box-sizing: border-box; pointer-events: auto; /* 允许点击 */
+            padding: 0 20px; box-sizing: border-box; pointer-events: auto;
         }
 
         .status-group { display: flex; gap: 10px; }
@@ -119,14 +133,15 @@
             background: var(--secondary-color); 
             border: 1px solid var(--primary-color);
             padding: 5px 12px; border-radius: 4px; font-size: 14px; 
-            color: var(--primary-color);
+            color: var(--text-color); 
+            border-color: var(--text-color);
             font-family: var(--font-main);
+            opacity: 0.9;
         }
 
-        /* === 主题切换按钮 (右上角) === */
         #theme-btn {
             background: var(--secondary-color);
-            border: 1px solid var(--primary-color);
+            border: 1px solid var(--text-color);
             color: var(--text-color);
             padding: 8px 15px;
             border-radius: 20px;
@@ -137,10 +152,10 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.2);
             transition: all 0.2s;
             text-transform: uppercase;
+            font-weight: bold;
         }
         #theme-btn:active { transform: scale(0.9); }
 
-        /* === 1. 功能控制台 === */
         #control-panel {
             position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
             width: 90%; max-width: 400px;
@@ -156,7 +171,7 @@
 
         .ctrl-btn {
             background: transparent; 
-            border: 1px solid rgba(128,128,128,0.3);
+            border: 1px solid rgba(128,128,128,0.5);
             color: var(--text-color); 
             padding: 8px 0; width: 32%; 
             border-radius: 8px;
@@ -167,12 +182,11 @@
         .ctrl-btn:active { transform: scale(0.95); }
         .ctrl-btn.active { 
             background: var(--secondary-color); 
-            border-color: var(--primary-color); 
-            color: var(--primary-color);
+            border-color: var(--text-color); 
+            color: var(--text-color);
             box-shadow: var(--btn-active-shadow);
         }
         
-        /* === 2. 底部终止横条 === */
         #stop-bar {
             position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%);
             width: 90%; max-width: 400px; height: 50px;
@@ -292,29 +306,25 @@
     let lastPredictionTime = 0;
     const PREDICTION_INTERVAL = 150; 
     const CONFIDENCE_THRESHOLD = 0.6; 
-    
     let lastDangerTime = 0;        
     const DANGER_HOLD_TIME = 800;  
-    
     let lastBeepTime = 0;
     const BEEP_INTERVAL = 500;     
-    
     let lastVibrateTime = 0;
     const VIBRATE_INTERVAL = 1000;
 
-    // Logic Params
     let dangerFrameCount = 0;
     const DANGER_TRIGGER_FRAMES = 3;
     const ROI_X_MIN = 0.25;
     const ROI_X_MAX = 0.75;
 
-    let alertMode = 2; // Default: Both
+    let alertMode = 2; 
     let pipTarget = video; 
     let frameCount = 0; 
     const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
     let animationId = null; 
 
-    // === 主题管理 ===
+    // === 主题切换逻辑 ===
     const themes = ['cyber', 'modern', 'safety', 'pixel'];
     const themeNames = ['🎨 CYBER', '☀️ MODERN', '🚧 SAFETY', '👾 PIXEL'];
     let currentThemeIndex = 0;
@@ -392,7 +402,6 @@
         lastBeepTime = now;
         if (audioCtx.state === 'suspended') audioCtx.resume();
 
-        // 像素模式下，声音可以是 8-bit 风格 (方波)
         const type = themes[currentThemeIndex] === 'pixel' ? 'square' : 'sine';
         
         try {
@@ -466,11 +475,12 @@
         frameCount++;
         if (video.paused && video.srcObject) video.play().catch(()=>{});
         
-        // 获取当前主题颜色
+        // 获取当前主题变量
         const style = getComputedStyle(document.body);
         const primaryColor = style.getPropertyValue('--primary-color').trim();
         const dangerColor = style.getPropertyValue('--danger-color').trim();
         const fontMain = style.getPropertyValue('--font-main').trim();
+        const textColor = style.getPropertyValue('--text-color').trim(); 
         const currentTheme = themes[currentThemeIndex];
 
         if (isEcoMode) {
@@ -484,20 +494,19 @@
             
             ctx.beginPath();
             if (currentTheme === 'pixel') {
-                ctx.rect(centerX - 40, centerY - 40, 80, 80); // 像素模式画方块
+                ctx.rect(centerX - 40, centerY - 40, 80, 80);
             } else {
-                ctx.arc(centerX, centerY, 50, 0, Math.PI * 2); // 其他模式画圆
+                ctx.arc(centerX, centerY, 50, 0, Math.PI * 2);
             }
             ctx.stroke();
 
-            ctx.fillStyle = primaryColor;
+            ctx.fillStyle = textColor; 
             ctx.font = `20px ${fontMain}`;
             ctx.textAlign = 'center';
             ctx.fillText("ECO MODE", centerX, centerY + 100);
         } else {
             if (canvas.width > 0) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             
-            // 只有 Safety 和 Cyber 模式显示辅助线
             if (currentTheme !== 'modern') {
                 const leftLine = canvas.width * ROI_X_MIN;
                 const rightLine = canvas.width * ROI_X_MAX;
@@ -519,7 +528,7 @@
         if (!isDetecting && (now - lastPredictionTime > PREDICTION_INTERVAL) && model) {
             isDetecting = true;
             model.detect(video, 20, CONFIDENCE_THRESHOLD).then(predictions => {
-                if(isSystemRunning) processPredictions(predictions, primaryColor, dangerColor, fontMain, currentTheme);
+                if(isSystemRunning) processPredictions(predictions, primaryColor, dangerColor, fontMain, textColor, currentTheme);
                 lastPredictionTime = performance.now();
                 isDetecting = false;
                 scheduleNextFrame(); 
@@ -533,7 +542,7 @@
         }
     }
 
-    function processPredictions(predictions, primary, danger, font, theme) {
+    function processPredictions(predictions, primary, danger, font, textCol, theme) {
         let currentFrameDangerous = false;
         
         predictions.forEach(prediction => {
@@ -548,7 +557,6 @@
 
                 if (!isEcoMode) {
                     let color = isDanger ? danger : primary;
-                    // Modern 模式下，非危险物体几乎透明
                     if (theme === 'modern' && !isDanger) color = 'rgba(255,255,255,0.3)';
 
                     ctx.strokeStyle = color;
@@ -556,17 +564,13 @@
                     
                     ctx.beginPath();
                     if (theme === 'modern') {
-                        // Modern: 圆角矩形
                         roundRect(ctx, x, y, width, height, 15);
                     } else if (theme === 'pixel') {
-                        // Pixel: 粗糙的矩形 + 额外的角标
                         ctx.rect(x, y, width, height);
-                        // 画一些装饰性的“锁定点”
                         ctx.fillStyle = color;
                         ctx.fillRect(x-5, y-5, 10, 10);
                         ctx.fillRect(x+width-5, y+height-5, 10, 10);
                     } else {
-                        // Cyber & Safety: 角标框
                         const lineLen = width * 0.2;
                         ctx.moveTo(x, y + lineLen); ctx.lineTo(x, y); ctx.lineTo(x + lineLen, y);
                         ctx.moveTo(x + width - lineLen, y); ctx.lineTo(x + width, y); ctx.lineTo(x + width, y + lineLen);
@@ -576,7 +580,6 @@
                     ctx.stroke();
 
                     if (inSafeZone) {
-                        // 标签背景
                         ctx.fillStyle = color;
                         if (theme === 'modern') {
                              roundRect(ctx, x, y - 30, width, 25, 5, true);
@@ -584,10 +587,20 @@
                             ctx.fillRect(x, y - 30, width, 25);
                         }
                         
-                        // 标签文字
-                        ctx.fillStyle = (theme === 'safety' || theme === 'modern') ? 'white' : 'black';
+                        // 强制颜色修正
+                        if (theme === 'pixel') {
+                            ctx.fillStyle = 'black'; 
+                        } else if (theme === 'safety') {
+                            ctx.fillStyle = 'black';
+                        } else if (theme === 'modern') {
+                            ctx.fillStyle = 'white';
+                        } else {
+                            ctx.fillStyle = 'black'; 
+                        }
+                        
+                        // 字体大小修正
                         ctx.font = `bold 14px ${font}`;
-                        if (theme === 'pixel') ctx.font = `10px ${font}`; // 像素字体要小一点
+                        if (theme === 'pixel') ctx.font = `12px ${font}`; 
                         
                         ctx.textAlign = 'center';
                         ctx.fillText(prediction.class.toUpperCase(), x + width/2, y - 12);
@@ -608,7 +621,6 @@
         }
     }
 
-    // 辅助函数：画圆角矩形
     function roundRect(ctx, x, y, w, h, r, fill = false) {
         if (w < 2 * r) r = w / 2;
         if (h < 2 * r) r = h / 2;
@@ -636,7 +648,6 @@
             ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // 警告图标
             ctx.fillStyle = 'white';
             ctx.strokeStyle = 'white';
             ctx.lineWidth = 5;
